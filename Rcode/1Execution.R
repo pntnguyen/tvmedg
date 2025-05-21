@@ -50,7 +50,7 @@ cl <- makeCluster(8)
 registerDoParallel(cl)
 
 start_time <- Sys.time()
-datMC <- g_boot(data = dat, length = 12, seed = 0, montecarlo = 1000)
+datMC <- g_boot(data = dat, length = 12, seed = 0, montecarlo = 10000)
 end_time <- Sys.time()
 (elapsed_time <- end_time - start_time)
 
