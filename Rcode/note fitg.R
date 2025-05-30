@@ -33,17 +33,17 @@ MC$idsim <- 1:montecarlo
 
 ## MC is pgdat of gform function
 
-ii = 1
+ii = 2
 pgdat = MC
 
 # length is an agurment
-length = 36
+length = 12
 ##Qaa
-ay = 1
+ay = 0
 am = 1
+seed = 123
 
-
-gform <- function(ii, pgdat, length, am, ay) {
+gform <- function(ii, pgdat, length, am, ay,seed = 0) {
   
   pFunc <- function(mod, ndat) {
     as.numeric(predict(mod, newdata = ndat, type = "response") > runif(1))
@@ -53,7 +53,7 @@ gform <- function(ii, pgdat, length, am, ay) {
     pred_prob <- predict(mod, newdata = ndat, type = "response")
     return(rbinom(1, size = 1, prob = pred_prob))
   }
-  
+  set.seed(seed)
   d <- pgdat
   d <- d[d$idsim==ii, ]
   
@@ -63,7 +63,7 @@ gform <- function(ii, pgdat, length, am, ay) {
   length <- length
   
   
-  cat("...", paste0(ii, "(", id_ori, ")"))
+  # cat("...", paste0(ii, "(", id_ori, ")"))
   
   
   
@@ -90,7 +90,7 @@ gform <- function(ii, pgdat, length, am, ay) {
   T3mp[1] <- d$T3
   
   
-  for (l in 2:length) {
+  for (l in 2:11) {
     
     if (Yp[l-1]==0) {
       

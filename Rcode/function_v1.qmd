@@ -399,7 +399,7 @@ test_that("cen and scale function", {
 ```{r}
 ## resamp function
 
-resamp <- function(data,boot = FALSE,seed = 0){
+resamp <- function(data,seed = 0){
   df <- data
   
   set.seed(seed)
@@ -410,33 +410,33 @@ resamp <- function(data,boot = FALSE,seed = 0){
   clusters <- names(table(df$id))
   index <- sample(1:length(clusters), length(clusters), replace = TRUE)
   bb <- table(clusters[index])
-  boot_df <- NULL
+  boot <- NULL
   
-  if(boot == FALSE) {
+  if(seed == 0) {
     # not doing bootstrap
-    boot_df <- df 
+    boot <- df 
   } else {
     for(zzz in 1:max(bb)) {
       # Loop over repeated id
       cc <- df[df$id %in% names(bb[bb %in% c(zzz:max(bb))]), ]
       cc$bid <- paste0(cc$id, zzz)
-      boot_df <- rbind(boot_df, cc)
+      boot <- rbind(boot, cc)
     }
   }
 
-  boot_df$jj <- cen_and_scale(boot_df$j)$jj
+  boot$jj <- cen_and_scale(boot$j)$jj
   
-  boot_df
+  boot
 }
 ```
 
 ```{r}
-fitg <- function(data, seed = 0,boot = FALSE,
+fitg <- function(data, seed = 0,
                  mreg = "binomial",
                  lreg = c("binomial","gaussian","gaussian"),
                  yreg = "binomial",dof = 3){
-  
-  res_df <- resamp(data = data$df,boot = boot,seed = seed)
+  set.seed(seed)
+  res_df <- resamp(data = data$df,seed = seed)
   
   fitR <- list()
   
@@ -487,8 +487,7 @@ process_data(
   lag = 2,
   time = c("mm"),
   data = dat0
-) %>% fitg(seed = 0,boot = FALSE,
-           mreg = "binomial",
+) %>% fitg(mreg = "binomial",
            lreg = c("binomial","gaussian","gaussian"),
            yreg = "binomial",dof = 3)
 ```
@@ -583,10 +582,9 @@ fitR2 <- process_data(
   lag = 2,
   time = c("mm"),
   data = dat0
-) %>% fitg(seed = 0,boot = FALSE,
-           mreg = "binomial",
+) %>% fitg(mreg = "binomial",
            lreg = c("binomial","gaussian","gaussian"),
-           yreg = "binomial",dof = 3) 
+           yreg = "binomial",dof = 3,seed = 0) 
 ```
 :::
 :::
@@ -628,12 +626,12 @@ test_that("fitg function", {
 })
 ```
 
-# base_line_mc function
+# boot_g function
+
+em tách thành 1 function để khi chạy 1:iter, không bị replicate lại khúc lấy boostrap, để đỡ tốn tg
 
 ```{r}
-base_line_mc <- function(data,montecarlo = 10000,seed = 0){
-  
-  set.seed(seed)
+boot_g <- function(data,n_boot = 10000,repdf = 1){
   
   boot <- data$df
   # Select baseline visit
@@ -643,7 +641,12 @@ base_line_mc <- function(data,montecarlo = 10000,seed = 0){
   
   MC <- NULL
   
-    samples <- sample(df0$idn, size = montecarlo, replace = T)
+  if (n_boot == 0) {
+    MC <- do.call(rbind, replicate(repdf, df0, simplify = FALSE))
+    MC$idsim <- 1:nrow(MC)
+    
+  } else {
+    samples <- sample(df0$idn, size = n_boot, replace = T)
     bb <- table(samples)
     
     for(zzz in 1:max(bb)) {
@@ -652,7 +655,8 @@ base_line_mc <- function(data,montecarlo = 10000,seed = 0){
       MC <- rbind(MC, cc)
     }
     
-    MC$idsim <- 1:montecarlo
+    MC$idsim <- 1:n_boot
+  }
   
   data$res_df <- MC %>% as_tibble()
   data
@@ -671,11 +675,10 @@ process_data(
   lag = 2,
   time = c("mm"),
   data = dat0
-) %>% fitg(seed = 0,boot = FALSE,
-           mreg = "binomial",
+) %>% fitg(mreg = "binomial",
            lreg = c("binomial","gaussian","gaussian"),
-           yreg = "binomial",dof = 3) %>% 
-  base_line_mc(montecarlo = 10000,seed = 0)
+           yreg = "binomial",dof = 3,seed = 0) %>% 
+  boot_g(n_boot = 0,repdf = 1) 
 ```
 
 ## Compare
@@ -685,7 +688,8 @@ process_data(
 ```{r}
 seed = 0 
 set.seed(0)
-montecarlo = 10000
+montecarlo = 0
+repdf = 1
 
 df <- dat0 |> 
   group_by(id) |>
@@ -703,50 +707,49 @@ df <- dat0 |>
   ) |> ungroup() %>% df_prep()
 
 # Resampling based on id and store in `boot` dataset
-clusters <- names(table(df$id))
-index <- sample(1:length(clusters), length(clusters), replace = TRUE)
-bb <- table(clusters[index])
-boot <- NULL
-
-if(seed == 0) {
-  # not doing bootstrap
-  boot <- df 
-} else {
-  for(zzz in 1:max(bb)) {
-    # Loop over repeated id
-    cc <- df[df$id %in% names(bb[bb %in% c(zzz:max(bb))]), ]
-    cc$bid <- paste0(cc$id, zzz)
-    boot <- rbind(boot, cc)
-  }
-}
-
-# Select baseline visit
-df0 <- boot[boot$j==1, ]
-
-df0$idn <- 1:nrow(df0)
-
-MC <- NULL
-
-if (montecarlo == 0) {
-  MC <- do.call(rbind, replicate(repdf, df0, simplify = FALSE))
-  MC$idsim <- 1:nrow(MC)
+  clusters <- names(table(df$id))
+  index <- sample(1:length(clusters), length(clusters), replace = TRUE)
+  bb <- table(clusters[index])
+  boot <- NULL
   
-} else {
-  samples <- sample(df0$idn, size = montecarlo, replace = T)
-  bb <- table(samples)
-  
-  for(zzz in 1:max(bb)) {
-    cc <- df0[df0$idn %in% names(bb[bb %in% c(zzz:max(bb))]), ]
-    cc$bid <- paste0(cc$idn, zzz)
-    MC <- rbind(MC, cc)
+  if(seed == 0) {
+    # not doing bootstrap
+    boot <- df 
+  } else {
+    for(zzz in 1:max(bb)) {
+      # Loop over repeated id
+      cc <- df[df$id %in% names(bb[bb %in% c(zzz:max(bb))]), ]
+      cc$bid <- paste0(cc$id, zzz)
+      boot <- rbind(boot, cc)
+    }
   }
   
-  MC$idsim <- 1:montecarlo
-}
-
+  # Select baseline visit
+  df0 <- boot[boot$j==1, ]
+  
+  df0$idn <- 1:nrow(df0)
+  
+  MC <- NULL
+  
+  if (montecarlo == 0) {
+    MC <- do.call(rbind, replicate(repdf, df0, simplify = FALSE))
+    MC$idsim <- 1:nrow(MC)
+    
+  } else {
+    samples <- sample(df0$idn, size = montecarlo, replace = T)
+    bb <- table(samples)
+    
+    for(zzz in 1:max(bb)) {
+      cc <- df0[df0$idn %in% names(bb[bb %in% c(zzz:max(bb))]), ]
+      cc$bid <- paste0(cc$idn, zzz)
+      MC <- rbind(MC, cc)
+    }
+    
+    MC$idsim <- 1:montecarlo
+  }
+  
 MC <- MC %>% as_tibble()
 MC
-
 ```
 :::
 
@@ -761,11 +764,10 @@ fitR2 <- process_data(
   lag = 2,
   time = c("mm"),
   data = dat0
-) %>% fitg(seed = 0,boot = FALSE,
-           mreg = "binomial",
+) %>% fitg(mreg = "binomial",
            lreg = c("binomial","gaussian","gaussian"),
-           yreg = "binomial",dof = 3) %>% 
-  base_line_mc(montecarlo = 10000,seed = 0)
+           yreg = "binomial",dof = 3,seed = 0) %>% 
+  boot_g(n_boot = 0,repdf = 1) 
 
 fitR2$res_df
 ```
@@ -778,8 +780,8 @@ fitR2$res_df
 along_redf <- MC %>% as.data.frame()
 test_redf <- fitR2$res_df %>% as.data.frame()
 
-test_that("base_line_mc function", {
-  
+test_that("bootg function", {
+
   # id, v1 - v4
   expect_equal(along_redf[,c(1:5)],test_redf[,c(1:5)])
   
@@ -787,26 +789,160 @@ test_that("base_line_mc function", {
   expect_equal(along_redf[,c("A")],test_redf[,c("A1")])
   expect_equal(along_redf[,c("Al1")],test_redf[,c("A1l1")])
   expect_equal(along_redf[,c("Al2")],test_redf[,c("A1l2")])
-  
+
   ## time-dependent covariate
   expect_equal(along_redf[,c("T1")],test_redf[,c("L1")])
   expect_equal(along_redf[,c("T2")],test_redf[,c("L2")])
   expect_equal(along_redf[,c("T3")],test_redf[,c("L3")])
-  
+
   ## time-dependent covariate + lag
   expect_equal(along_redf[,c("T1l1")],test_redf[,c("L1l1")])
   expect_equal(along_redf[,c("T2l1")],test_redf[,c("L2l1")])
   expect_equal(along_redf[,c("T3l1")],test_redf[,c("L3l1")])
-  
+
   expect_equal(along_redf[,c("T1l2")],test_redf[,c("L1l2")])
   expect_equal(along_redf[,c("T2l2")],test_redf[,c("L2l2")])
   expect_equal(along_redf[,c("T3l2")],test_redf[,c("L3l2")])
-  
+
   ## Mediator
   expect_equal(along_redf[,c("M1")],test_redf[,c("M1")])
   expect_equal(along_redf[,c("M1l1")],test_redf[,c("M1l1")])
   expect_equal(along_redf[,c("M1l2")],test_redf[,c("M1l2")])
+
+  ## outcome and time
+  expect_equal(along_redf[,c("Y","j")],test_redf[,c("Y","j")])
+})
+```
+
+## seed not equal 0 and bootstraping
+
+::: columns
+::: {.column width="50%"}
+```{r}
+seed = 123 
+set.seed(seed)
+montecarlo = 100
+repdf = 1
+
+df <- dat0 |> 
+  group_by(id) |>
+  mutate(
+    A_lag1 = lag(Ap, n = 1, default = 0),
+    A_lag2 = lag(Ap, n = 2, default = 0),
+    M_lag1 = lag(Mp, n = 1, default = 0),
+    M_lag2 = lag(Mp, n = 2, default = 0),
+    L1_lag1 = lag(L1, n = 1, default = 0),
+    L1_lag2 = lag(L1, n = 2, default = 0),
+    L2_lag1 = lag(L2, n = 1, default = 100),
+    L2_lag2 = lag(L2, n = 2, default = 100),
+    L3_lag1 = lag(L3, n = 1, default = 80),
+    L3_lag2 = lag(L3, n = 2, default = 80)
+  ) |> ungroup() %>% df_prep()
+
+# Resampling based on id and store in `boot` dataset
+  clusters <- names(table(df$id))
+  index <- sample(1:length(clusters), length(clusters), replace = TRUE)
+  bb <- table(clusters[index])
+  boot <- NULL
   
+  if(seed == 0) {
+    # not doing bootstrap
+    boot <- df 
+  } else {
+    for(zzz in 1:max(bb)) {
+      # Loop over repeated id
+      cc <- df[df$id %in% names(bb[bb %in% c(zzz:max(bb))]), ]
+      cc$bid <- paste0(cc$id, zzz)
+      boot <- rbind(boot, cc)
+    }
+  }
+  
+  # Select baseline visit
+  df0 <- boot[boot$j==1, ]
+  
+  df0$idn <- 1:nrow(df0)
+  
+  MC <- NULL
+  
+  if (montecarlo == 0) {
+    MC <- do.call(rbind, replicate(repdf, df0, simplify = FALSE))
+    MC$idsim <- 1:nrow(MC)
+    
+  } else {
+    samples <- sample(df0$idn, size = montecarlo, replace = T)
+    bb <- table(samples)
+    
+    for(zzz in 1:max(bb)) {
+      cc <- df0[df0$idn %in% names(bb[bb %in% c(zzz:max(bb))]), ]
+      cc$bid <- paste0(cc$idn, zzz)
+      MC <- rbind(MC, cc)
+    }
+    
+    MC$idsim <- 1:montecarlo
+  }
+  
+MC <- MC %>% as_tibble()
+MC
+```
+:::
+
+::: {.column width="50%"}
+```{r}
+# set.seed(123)
+fitR2 <- process_data(
+  fix = c("age","sex","ow","risk"),
+  expo = c("Ap"),
+  med = c("Mp"),
+  tvar = c("L1","L2","L3"),
+  outc = c("Yp"),
+  lag = 2,
+  time = c("mm"),
+  data = dat0
+) %>% fitg(mreg = "binomial",
+           lreg = c("binomial","gaussian","gaussian"),
+           yreg = "binomial",dof = 3,seed = 123) %>% 
+  boot_g(n_boot = 100,repdf = 1) 
+
+fitR2$res_df
+```
+:::
+:::
+
+## Test
+
+```{r}
+along_redf <- MC %>% as.data.frame()
+test_redf <- fitR2$res_df %>% as.data.frame()
+
+test_that("bootg function", {
+
+  # id, v1 - v4
+  expect_equal(along_redf[,c(1:5)],test_redf[,c(1:5)])
+  
+  # exposure variables
+  expect_equal(along_redf[,c("A")],test_redf[,c("A1")])
+  expect_equal(along_redf[,c("Al1")],test_redf[,c("A1l1")])
+  expect_equal(along_redf[,c("Al2")],test_redf[,c("A1l2")])
+
+  ## time-dependent covariate
+  expect_equal(along_redf[,c("T1")],test_redf[,c("L1")])
+  expect_equal(along_redf[,c("T2")],test_redf[,c("L2")])
+  expect_equal(along_redf[,c("T3")],test_redf[,c("L3")])
+
+  ## time-dependent covariate + lag
+  expect_equal(along_redf[,c("T1l1")],test_redf[,c("L1l1")])
+  expect_equal(along_redf[,c("T2l1")],test_redf[,c("L2l1")])
+  expect_equal(along_redf[,c("T3l1")],test_redf[,c("L3l1")])
+
+  expect_equal(along_redf[,c("T1l2")],test_redf[,c("L1l2")])
+  expect_equal(along_redf[,c("T2l2")],test_redf[,c("L2l2")])
+  expect_equal(along_redf[,c("T3l2")],test_redf[,c("L3l2")])
+
+  ## Mediator
+  expect_equal(along_redf[,c("M1")],test_redf[,c("M1")])
+  expect_equal(along_redf[,c("M1l1")],test_redf[,c("M1l1")])
+  expect_equal(along_redf[,c("M1l2")],test_redf[,c("M1l2")])
+
   ## outcome and time
   expect_equal(along_redf[,c("Y","j")],test_redf[,c("Y","j")])
 })
@@ -919,7 +1055,7 @@ g_form <- function(data, ii = 2, length = 12, am = 1, ay = 0){
       }
       
       for (x in 1:length(data$L)){
-      
+        
         L_reg <- data$L[[x]]$family$family
         
         Lmp[l,x] <- case_when(
@@ -1024,11 +1160,10 @@ process_data(
   lag = 2,
   time = c("mm"),
   data = dat0
-) %>% fitg(seed = 0,boot = FALSE,
-           mreg = "binomial",
+) %>% fitg(mreg = "binomial",
            lreg = c("binomial","gaussian","gaussian"),
-           yreg = "binomial",dof = 3) %>% 
-  base_line_mc(montecarlo = 10000,seed = 0) %>% 
+           yreg = "binomial",dof = 3,seed = 0) %>% 
+  boot_g(n_boot = 0,repdf = 1) %>% 
   g_form(ii = 1, length = 12, ay = 1, am = 1)
 ```
 
@@ -1057,7 +1192,7 @@ gform <- function(ii, pgdat, length, am, ay) {
   length <- length
   
   
-  # cat("...", paste0(ii, "(", id_ori, ")"))
+  cat("...", paste0(ii, "(", id_ori, ")"))
   
   
   
@@ -1235,8 +1370,9 @@ gform <- function(ii, pgdat, length, am, ay) {
 ::: {.column width="50%"}
 ```{r}
 seed = 0 
-set.seed(0)
-montecarlo = 10000
+set.seed(seed)
+montecarlo = 0
+repdf = 1
 
 df <- dat0 |> 
   group_by(id) |>
@@ -1254,47 +1390,47 @@ df <- dat0 |>
   ) |> ungroup() %>% df_prep()
 
 # Resampling based on id and store in `boot` dataset
-clusters <- names(table(df$id))
-index <- sample(1:length(clusters), length(clusters), replace = TRUE)
-bb <- table(clusters[index])
-boot <- NULL
-
-if(seed == 0) {
-  # not doing bootstrap
-  boot <- df 
-} else {
-  for(zzz in 1:max(bb)) {
-    # Loop over repeated id
-    cc <- df[df$id %in% names(bb[bb %in% c(zzz:max(bb))]), ]
-    cc$bid <- paste0(cc$id, zzz)
-    boot <- rbind(boot, cc)
-  }
-}
-
-# Select baseline visit
-df0 <- boot[boot$j==1, ]
-
-df0$idn <- 1:nrow(df0)
-
-MC <- NULL
-
-if (montecarlo == 0) {
-  MC <- do.call(rbind, replicate(repdf, df0, simplify = FALSE))
-  MC$idsim <- 1:nrow(MC)
+  clusters <- names(table(df$id))
+  index <- sample(1:length(clusters), length(clusters), replace = TRUE)
+  bb <- table(clusters[index])
+  boot <- NULL
   
-} else {
-  samples <- sample(df0$idn, size = montecarlo, replace = T)
-  bb <- table(samples)
-  
-  for(zzz in 1:max(bb)) {
-    cc <- df0[df0$idn %in% names(bb[bb %in% c(zzz:max(bb))]), ]
-    cc$bid <- paste0(cc$idn, zzz)
-    MC <- rbind(MC, cc)
+  if(seed == 0) {
+    # not doing bootstrap
+    boot <- df 
+  } else {
+    for(zzz in 1:max(bb)) {
+      # Loop over repeated id
+      cc <- df[df$id %in% names(bb[bb %in% c(zzz:max(bb))]), ]
+      cc$bid <- paste0(cc$id, zzz)
+      boot <- rbind(boot, cc)
+    }
   }
   
-  MC$idsim <- 1:montecarlo
-}
-
+  # Select baseline visit
+  df0 <- boot[boot$j==1, ]
+  
+  df0$idn <- 1:nrow(df0)
+  
+  MC <- NULL
+  
+  if (montecarlo == 0) {
+    MC <- do.call(rbind, replicate(repdf, df0, simplify = FALSE))
+    MC$idsim <- 1:nrow(MC)
+    
+  } else {
+    samples <- sample(df0$idn, size = montecarlo, replace = T)
+    bb <- table(samples)
+    
+    for(zzz in 1:max(bb)) {
+      cc <- df0[df0$idn %in% names(bb[bb %in% c(zzz:max(bb))]), ]
+      cc$bid <- paste0(cc$idn, zzz)
+      MC <- rbind(MC, cc)
+    }
+    
+    MC$idsim <- 1:montecarlo
+  }
+  
 gform(ii = 1, pgdat = MC, length = 12, ay = 1, am = 1) %>% as_tibble()
 ```
 :::
@@ -1310,11 +1446,10 @@ process_data(
   lag = 2,
   time = c("mm"),
   data = dat0
-) %>% fitg(seed = 0,boot = FALSE,
-           mreg = "binomial",
+) %>% fitg(mreg = c("binomial"),
            lreg = c("binomial","gaussian","gaussian"),
-           yreg = "binomial",dof = 3) %>% 
-  base_line_mc(montecarlo = 10000,seed = 0) %>% 
+           yreg = "binomial",dof = 3,seed = 0) %>% 
+  boot_g(n_boot = 0,repdf = 1) %>% 
   g_form(ii = 1, length = 12, ay = 1, am = 1) %>% as_tibble()
 ```
 :::
@@ -1326,7 +1461,7 @@ process_data(
 along_redf <- gform(ii = 1, pgdat = MC, length = 12, ay = 1, am = 1) %>% 
   as.data.frame()
 
-fitR2 <- process_data(
+test_redf <- process_data(
   fix = c("age","sex","ow","risk"),
   expo = c("Ap"),
   med = c("Mp"),
@@ -1335,16 +1470,13 @@ fitR2 <- process_data(
   lag = 2,
   time = c("mm"),
   data = dat0
-) %>% fitg(seed = 0,boot = FALSE,
-           mreg = "binomial",
+) %>% fitg(mreg = c("binomial"),
            lreg = c("binomial","gaussian","gaussian"),
-           yreg = "binomial",dof = 3) %>% 
-  base_line_mc(montecarlo = 10000,seed = 0)
+           yreg = "binomial",dof = 3,seed = 0) %>% 
+  boot_g(n_boot = 0,repdf = 1) %>% 
+  g_form(ii = 1, length = 12, ay = 1, am = 1) %>% data.frame()
 
-test_redf <- fitR2 %>%  g_form(ii = 1, length = 12, ay = 1, am = 1) %>% data.frame()
-
-
-test_that("g_form function", {
+test_that("bootg function", {
 
   # boot_num - Am
   expect_equal(along_redf[,c(1:6)],test_redf[,c(1:6)])
@@ -1364,12 +1496,10 @@ test_that("g_form function", {
 ## Test AM = 1, AY = 0, patient number 2
 
 ```{r}
-set.seed(0)
 along_redf <- gform(ii = 2, pgdat = MC, length = 12, ay = 0, am = 1) %>% 
   as.data.frame()
 
-
-fitR2 <- process_data(
+test_redf <- process_data(
   fix = c("age","sex","ow","risk"),
   expo = c("Ap"),
   med = c("Mp"),
@@ -1378,13 +1508,11 @@ fitR2 <- process_data(
   lag = 2,
   time = c("mm"),
   data = dat0
-) %>% fitg(seed = 0,boot = FALSE,
-           mreg = "binomial",
+) %>% fitg(mreg = c("binomial"),
            lreg = c("binomial","gaussian","gaussian"),
-           yreg = "binomial",dof = 3) %>% 
-  base_line_mc(montecarlo = 10000,seed = 0)
-  
-test_redf <- fitR2 %>%  g_form(ii = 2, length = 12, ay = 0, am = 1) %>% data.frame()
+           yreg = "binomial",dof = 3,seed = 0) %>% 
+  boot_g(n_boot = 0,repdf = 1) %>% 
+  g_form(ii = 2, length = 12, ay = 0, am = 1) %>% data.frame()
 
 test_that("bootg function", {
 
@@ -1409,7 +1537,7 @@ test_that("bootg function", {
 along_redf <- gform(ii = 55, pgdat = MC, length = 12, ay = 0, am = 0) %>% 
   as.data.frame()
 
-fitR2 <- process_data(
+test_redf <- process_data(
   fix = c("age","sex","ow","risk"),
   expo = c("Ap"),
   med = c("Mp"),
@@ -1418,13 +1546,11 @@ fitR2 <- process_data(
   lag = 2,
   time = c("mm"),
   data = dat0
-) %>% fitg(seed = 0,boot = FALSE,
-           mreg = "binomial",
+) %>% fitg(mreg = c("binomial"),
            lreg = c("binomial","gaussian","gaussian"),
-           yreg = "binomial",dof = 3) %>% 
-  base_line_mc(montecarlo = 10000,seed = 0)
-
-test_redf <- fitR2 %>%  g_form(ii = 55, length = 12, ay = 0, am = 0) %>% data.frame()
+           yreg = "binomial",dof = 3,seed = 0) %>% 
+  boot_g(n_boot = 0,repdf = 1) %>% 
+  g_form(ii = 55, length = 12, ay = 0, am = 0) %>% data.frame()
 
 test_that("bootg function", {
 
@@ -1455,11 +1581,10 @@ process_data(
   lag = 2,
   time = c("mm"),
   data = dat0
-) %>% fitg(seed = 0,boot = FALSE,
-           mreg = c("binomial","binomial"),
+) %>% fitg(mreg = c("binomial","binomial"),
            lreg = c("binomial","gaussian","gaussian"),
-           yreg = "binomial",dof = 3) %>% 
-  base_line_mc(montecarlo = 10000,seed = 0) %>% 
+           yreg = "binomial",dof = 3,seed = 0) %>% 
+  boot_g(n_boot = 0,repdf = 1) %>% 
   g_form(ii = 1, length = 12, ay = 1, am = 1)
 ```
 
@@ -1475,11 +1600,10 @@ process_data(
   lag = 3,
   time = c("mm"),
   data = dat0
-) %>% fitg(seed = 0,boot = FALSE,
-           mreg = "binomial",
+) %>% fitg(mreg = c("binomial"),
            lreg = c("binomial","gaussian","gaussian"),
-           yreg = "binomial",dof = 3) %>%
-  base_line_mc(montecarlo = 10000,seed = 0) %>%
+           yreg = "binomial",dof = 3,seed = 0) %>%
+  boot_g(n_boot = 0,repdf = 1) %>%
   g_form(ii = 1, length = 12, ay = 1, am = 0)
 ```
 
@@ -1498,11 +1622,10 @@ fitR2 <- process_data(
   lag = 2,
   time = c("mm"),
   data = dat0
-) %>% fitg(seed = 0,boot = FALSE,
-           mreg = "binomial",
+) %>% fitg(mreg = "binomial",
            lreg = c("binomial","gaussian","gaussian"),
-           yreg = "binomial",dof = 3) %>% 
-  base_line_mc(montecarlo = 10000,seed = 0) 
+           yreg = "binomial",dof = 3,seed = 0) %>% 
+  boot_g(n_boot = 10000,repdf = 1) 
 
 
 cl <- makeCluster(8)

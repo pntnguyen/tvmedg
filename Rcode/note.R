@@ -432,4 +432,5 @@ foreach (iii = 1:10, .combine = rbind) %dopar% {
   outdat00 <- g_form(ii = iii, data=fitR2, length = 12, ay = 0, am = 0)
   rbind(outdat11, outdat10, outdat00)
 }
+
 g_form(ii = 1, data=fitR2, length = 12, ay = 1, am = 1)
