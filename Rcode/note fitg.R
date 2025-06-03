@@ -242,6 +242,8 @@ gform(ii = 2, pgdat = MC, length = 100, ay = 1, am = 1) %>% View()
 cbind(along_redf[,c("M1p","T1mp","T1p","T2mp","T2p","T3mp","T3p")],
              test_redf[,c("M1","Lmp1","Lp1","Lmp2","Lp2","Lmp3","Lp3")]) %>% View()
 
+### note function to calculate 95% CI 
+
 
 
 

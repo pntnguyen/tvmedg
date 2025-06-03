@@ -89,7 +89,8 @@ rPE_b <- numeric(length = B)
 
 
 for(b in 1:B) {
-  tempdat <- g_boot(data = dat, length = 12, seed = b, montecarlo = 5000)
+  
+  tempdat <- g_boot(data = dat, length = 12, seed = b, montecarlo = 100)
   tQ11 <- tempdat |> filter(lastid == 1 & Ay == 1 & Am == 1)
   tQ10 <- tempdat |> filter(lastid == 1 & Ay == 1 & Am == 0)
   tQ00 <- tempdat |> filter(lastid == 1 & Ay == 0 & Am == 0)
