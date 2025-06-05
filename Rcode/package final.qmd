@@ -21,7 +21,7 @@ library(splines)
 # Import data
 
 ```{r}
-dat0 <- readRDS("../Data/tvmed_dat100.RDS")
+dat0 <- readRDS("../Data/tvmed_dat100_12mo.RDS")
 dat0 %>% as.data.frame() %>% as_tibble()
 ```
 
@@ -261,7 +261,7 @@ cen_and_scale <- function(time){
 # resamp function
 
 ```{r}
-resamp <- function(data,bootstr = FALSE){
+resamp <- function(data,boot = FALSE){
 
   df <- data
 
@@ -273,35 +273,35 @@ resamp <- function(data,bootstr = FALSE){
   clusters <- names(table(df$id))
   index <- sample(1:length(clusters), length(clusters), replace = TRUE)
   bb <- table(clusters[index])
-  boot <- NULL
+  boot_df <- NULL
   
-  if(bootstr == F) {
+  if(boot == F) {
     # not doing bootstrap
-    boot <- df 
+    boot_df <- df 
   } else {
     for(zzz in 1:max(bb)) {
       # Loop over repeated id
       cc <- df[df$id %in% names(bb[bb %in% c(zzz:max(bb))]), ]
       cc$bid <- paste0(cc$id, zzz)
-      boot <- rbind(boot, cc)
+      boot_df <- rbind(boot_df, cc)
     }
   }
   
-  boot$jj <- cen_and_scale(boot$j)$jj
+  boot_df$jj <- cen_and_scale(boot_df$j)$jj
   
-  boot
+  boot_df
 }
 ```
 
 # fitg function
 
 ```{r}
-fitg <- function(data,bootstr = FALSE,
+fitg <- function(data,boot = FALSE,
                  mreg = "binomial",
                  lreg = c("binomial","gaussian","gaussian"),
                  yreg = "binomial",dof = 3){
   
-  res_df <- resamp(data = data$df,bootstr = bootstr)
+  res_df <- resamp(data = data$df,boot = boot)
   
   fitR <- list()
   
@@ -355,7 +355,7 @@ process_data(
   time = c("mm"),
   norev = NULL,
   data = dat0
-) %>% fitg(bootstr=T,
+) %>% fitg(boot=T,
            mreg = "binomial",
            lreg = c("binomial","gaussian","gaussian"),
            yreg = "binomial",dof = 3)
@@ -403,7 +403,7 @@ process_data(
   time = c("mm"),
   # norev = c("Mp","L1"),
   data = dat0
-) %>% fitg(bootstr=F,
+) %>% fitg(boot=F,
            mreg = "binomial",
            lreg = c("binomial","gaussian","gaussian"),
            yreg = "binomial",dof = 3) %>% 
@@ -674,7 +674,7 @@ process_data(
   lag = 2,
   time = c("mm"),
   data = dat0
-) %>% fitg(bootstr=F,
+) %>% fitg(boot=F,
            mreg = "binomial",
            lreg = c("binomial","gaussian","gaussian"),
            yreg = "binomial",dof = 3) %>% 
@@ -695,7 +695,7 @@ process_data(
   norev = c("Mp"),
   time = c("mm"),
   data = dat0
-) %>% fitg(bootstr=T,
+) %>% fitg(boot=T,
            mreg = "binomial",
            lreg = c("binomial","gaussian","gaussian"),
            yreg = "binomial",dof = 3) %>% 
@@ -717,7 +717,7 @@ process_data(
   LM = TRUE,
   time = c("mm"),
   data = dat0
-) %>% fitg(bootstr=T,
+) %>% fitg(boot=T,
            mreg = "binomial",
            lreg = c("binomial","gaussian","gaussian"),
            yreg = "binomial",dof = 3) %>% 
@@ -1144,7 +1144,7 @@ fitR2 <- process_data(
   lag = 2,
   time = c("mm"),
   data = dat0
-) %>% fitg(bootstr=F,
+) %>% fitg(boot=F,
            mreg = "binomial",
            lreg = c("binomial","gaussian","gaussian"),
            yreg = "binomial",dof = 3) 
@@ -1292,7 +1292,7 @@ fitR2 <- process_data(
   lag = 2,
   time = c("mm"),
   data = dat0
-) %>% fitg(bootstr=T,
+) %>% fitg(boot=T,
            mreg = "binomial",
            lreg = c("binomial","gaussian","gaussian"),
            yreg = "binomial",dof = 3) 
@@ -1413,7 +1413,7 @@ fitR2 <- process_data(
   lag = 2,
   time = c("mm"),
   data = dat0
-) %>% fitg(bootstr=T,
+) %>% fitg(boot=T,
            mreg = "binomial",
            lreg = c("binomial","gaussian","gaussian"),
            yreg = "binomial",dof = 3) %>% 
@@ -1495,7 +1495,7 @@ test_redf <- process_data(
   norev = c("Mp"),
   time = c("mm"),
   data = dat0
-) %>% fitg(bootstr=T,
+) %>% fitg(boot=T,
            mreg = "binomial",
            lreg = c("binomial","gaussian","gaussian"),
            yreg = "binomial",dof = 3) %>% 
@@ -1554,7 +1554,7 @@ test_redf <- process_data(
   norev = c("Mp"),
   time = c("mm"),
   data = dat0
-) %>% fitg(bootstr=T,
+) %>% fitg(boot=T,
            mreg = "binomial",
            lreg = c("binomial","gaussian","gaussian"),
            yreg = "binomial",dof = 3) %>% 
@@ -1613,7 +1613,7 @@ test_redf <- process_data(
   norev = c("Mp"),
   time = c("mm"),
   data = dat0
-) %>% fitg(bootstr=T,
+) %>% fitg(boot=T,
            mreg = "binomial",
            lreg = c("binomial","gaussian","gaussian"),
            yreg = "binomial",dof = 3) %>% 
@@ -1660,10 +1660,48 @@ ExtResult2 <- function(data) {
 }
 ```
 
+
 ```{r}
-cal_ci <- function(data,ci = 0.95){
-  qnt <- quantile(data, probs = c((1-ci)/2,1 - (1-ci)/2))
-  paste0("(",round(qnt[1],3),",",round(qnt[2],3),")")
+## run parallel function
+
+run_parallel <- function(parallel){
+  
+  if (parallel == TRUE){
+    
+    gform_wrapper2 <- function(iii, data, length) {
+      outdat11 <- g_form(ii = iii,data=data, length = length, ay = 1, am = 1)
+      outdat10 <- g_form(ii = iii,data=data, length = length, ay = 1, am = 0)
+      outdat00 <- g_form(ii = iii,data=data, length = length, ay = 0, am = 0)
+      bind_rows(outdat11, outdat10, outdat00)
+    }
+    
+    resultDatM <- future_map_dfr(1:montecarlo,  
+                                 ~ gform_wrapper2(ii = .x, data = fitR2, length = length))
+  } else {
+    resultDatM <- data.frame()
+    for (iii in 1:montecarlo){
+      outdat11 <- g_form(ii = iii,data=fitR2, length = length, ay = 1, am = 1)
+      outdat10 <- g_form(ii = iii,data=fitR2, length = length, ay = 1, am = 0)
+      outdat00 <- g_form(ii = iii,data=fitR2, length = length, ay = 0, am = 0)
+      resultDatM2 <- rbind(outdat11, outdat10, outdat00)
+      resultDatM <- rbind(resultDatM,resultDatM2)
+    }
+  }
+  
+  resultDatM
+}
+```
+
+```{r}
+cal_ci <- function(data,ci = 0.95,boot = T){
+  
+  if (boot == F){
+    resu <- NULL
+  } else {
+    qnt <- quantile(data, na.rm = TRUE, probs = c((1-ci)/2,1 - (1-ci)/2))
+    resu <- paste0("(",round(qnt[1],3),",",round(qnt[2],3),")")
+  }
+  resu
 }
 ```
 
@@ -1673,11 +1711,11 @@ cal_ci <- function(data,ci = 0.95){
 ```{r}
 tvmedg <- function(data,
                    fix,expo,med,tvar,lag,outc,time,norev = NULL,LM = FALSE,
-                   bootstr = FALSE, seed = 0,
+                   boot = FALSE, seed = 0,
                    mreg = "binomial",
                    lreg = c("binomial","gaussian","gaussian"),
                    yreg = "binomial",dof = 3,
-                   montecarlo = 10000,length = 12,parallel=TRUE,iter = 1,ci = .95){
+                   montecarlo = 10000,length = 12,parallel=TRUE,nboot = 1,ci = .95){
   
   set.seed(seed)
   
@@ -1686,28 +1724,83 @@ tvmedg <- function(data,
   qqq <- matrix(ncol = 3) %>% data.frame()
   colnames(qqq) <- c("mQ11","mQ10","mQ00")
   
-  for (it in 1:iter){
+  qqq_ci <- matrix(ncol = 3) %>% data.frame()
+  colnames(qqq_ci) <- c("mQ11","mQ10","mQ00")
+  
+  
+  ## point estimate
+  
+  fitR2 <- process_data(
+    fix = fix,
+    expo = expo,
+    med = med,
+    tvar = tvar,
+    outc = outc,
+    lag = lag,
+    time = time,
+    norev = norev,
+    LM = LM,
+    data = data
+  )  %>% 
+    fitg(boot=boot,
+         mreg = mreg,
+         lreg = lreg,
+         yreg = yreg,dof = dof) %>% 
+    baseline_mc(montecarlo = montecarlo)
+  
+  if (parallel == TRUE){
     
-    ## boostrap
-    fitR2 <- process_data(
-      fix = fix,
-      expo = expo,
-      med = med,
-      tvar = tvar,
-      outc = outc,
-      lag = lag,
-      time = time,
-      norev = norev,
-      LM = LM,
-      data = data
-    )  %>% 
-      fitg(bootstr=bootstr,
-           mreg = mreg,
-           lreg = lreg,
-           yreg = yreg,dof = dof) %>% 
-      baseline_mc(montecarlo = montecarlo)
+    gform_wrapper2 <- function(iii, data, length) {
+      outdat11 <- g_form(ii = iii,data=data, length = length, ay = 1, am = 1)
+      outdat10 <- g_form(ii = iii,data=data, length = length, ay = 1, am = 0)
+      outdat00 <- g_form(ii = iii,data=data, length = length, ay = 0, am = 0)
+      bind_rows(outdat11, outdat10, outdat00)
+    }
     
-    ### gform for bootr data
+    resultDatM <- future_map_dfr(1:montecarlo,  
+                                 ~ gform_wrapper2(ii = .x, data = fitR2, length = length))
+  } else {
+    resultDatM <- data.frame()
+    for (iii in 1:montecarlo){
+      outdat11 <- g_form(ii = iii,data=fitR2, length = length, ay = 1, am = 1)
+      outdat10 <- g_form(ii = iii,data=fitR2, length = length, ay = 1, am = 0)
+      outdat00 <- g_form(ii = iii,data=fitR2, length = length, ay = 0, am = 0)
+      resultDatM2 <- rbind(outdat11, outdat10, outdat00)
+      resultDatM <- rbind(resultDatM,resultDatM2)
+    }
+  }
+  
+  qqq <- ExtResult2(resultDatM) %>% mutate(
+    rIE_b = mQ11 - mQ10,
+    rDE_b = mQ10 - mQ00,
+    rTE_b = mQ11 - mQ00,
+    rPE_b = rIE_b/ rTE_b
+  )
+  
+  if (boot == TRUE){
+    
+    for (it in 1:nboot){
+      
+      ## boostrap
+      fitR2a <- process_data(
+        fix = fix,
+        expo = expo,
+        med = med,
+        tvar = tvar,
+        outc = outc,
+        lag = lag,
+        time = time,
+        norev = norev,
+        LM = LM,
+        data = data
+      )  %>% 
+        fitg(boot=boot,
+             mreg = mreg,
+             lreg = lreg,
+             yreg = yreg,dof = dof) %>% 
+        baseline_mc(montecarlo = montecarlo)
+      
+      ## extract mean of q11,q10,q00 of the ith iter
       if (parallel == TRUE){
         
         gform_wrapper2 <- function(iii, data, length) {
@@ -1717,51 +1810,61 @@ tvmedg <- function(data,
           bind_rows(outdat11, outdat10, outdat00)
         }
         
-        resultDatM <- future_map_dfr(1:montecarlo,  
-                                     ~ gform_wrapper2(ii = .x, data = fitR2, length = length))
+        resultDatM_ci <- future_map_dfr(1:montecarlo,  
+                                        ~ gform_wrapper2(ii = .x, data = fitR2a, length = length))
       } else {
         resultDatM <- data.frame()
         for (iii in 1:montecarlo){
-          outdat11 <- g_form(ii = iii,data=fitR2, length = length, ay = 1, am = 1)
-          outdat10 <- g_form(ii = iii,data=fitR2, length = length, ay = 1, am = 0)
-          outdat00 <- g_form(ii = iii,data=fitR2, length = length, ay = 0, am = 0)
-          resultDatM2 <- rbind(outdat11, outdat10, outdat00)
-          resultDatM <- rbind(resultDatM,resultDatM2)
+          outdat11 <- g_form(ii = iii,data=fitR2a, length = length, ay = 1, am = 1)
+          outdat10 <- g_form(ii = iii,data=fitR2a, length = length, ay = 1, am = 0)
+          outdat00 <- g_form(ii = iii,data=fitR2a, length = length, ay = 0, am = 0)
+          resultDatM2_ci <- rbind(outdat11, outdat10, outdat00)
+          resultDatM_ci <- rbind(resultDatM_ci,resultDatM2_ci)
         }
       }
+      
+      qqq_ci[it,] <- ExtResult2(resultDatM_ci)
+    }
     
-    ## extract mean of q11,q10,q00 of the ith iter
+    qqq_ci <- qqq_ci %>% mutate(
+      rIE_b = mQ11 - mQ10,
+      rDE_b = mQ10 - mQ00,
+      rTE_b = mQ11 - mQ00,
+      rPE_b = rIE_b/ rTE_b
+    )
     
-    qqq[it,] <- ExtResult2(resultDatM)
   }
   
-  qqq <- qqq %>% mutate(
-    rIE_b = mQ11 - mQ10,
-    rDE_b = mQ10 - mQ00,
-    rTE_b = mQ11 - mQ00,
-    rPE_b = rIE_b/ rTE_b
-  )
   
   end_time <- Sys.time()
   elapsed_time <- end_time - start_time
   
+  obj <- list()
+  
+  obj$ori_df <- fitR2$df
+  obj$dat_MC <- resultDatM
+  class(obj) <- "tvmedg"
+  
   ## print result
-  cat("Q(1,1):", round(mean(qqq$mQ11), 3),cal_ci(qqq$mQ11,ci),'\n')
-  cat("Q(1,0):", round(mean(qqq$mQ10), 3),cal_ci(qqq$mQ10,ci),'\n')
-  cat("Q(0,0):", round(mean(qqq$mQ00), 3),cal_ci(qqq$mQ00,ci),'\n')
+  cat("Q(1,1):", round(qqq$mQ11, 3),cal_ci(qqq_ci$mQ11,ci,boot = boot),'\n')
+  cat("Q(1,0):", round(qqq$mQ10, 3),cal_ci(qqq_ci$mQ10,ci,boot = boot),'\n')
+  cat("Q(0,0):", round(qqq$mQ00, 3),cal_ci(qqq_ci$mQ00,ci,boot = boot),'\n')
   
-  cat("Indirect:", round(mean(qqq$rIE_b), 3),cal_ci(qqq$rIE_b,ci),'\n')
-  cat("Direct:", round(mean(qqq$rDE_b), 3),cal_ci(qqq$rDE_b,ci),'\n')
-  cat("Total:", round(mean(qqq$rTE_b), 3),cal_ci(qqq$rTE_b,ci),'\n')
+  cat("Indirect:", round(qqq$rIE_b, 3),cal_ci(qqq_ci$rIE_b,ci,boot = boot),'\n')
+  cat("Direct:", round(qqq$rDE_b, 3),cal_ci(qqq_ci$rDE_b,ci,boot = boot),'\n')
+  cat("Total:", round(qqq$rTE_b, 3),cal_ci(qqq_ci$rTE_b,ci,boot = boot),'\n')
   cat("Proportional explain:", 
-      round(mean(qqq$rPE_b), 3),cal_ci(qqq$rPE_b,ci),'\n')
+      round(qqq$rPE_b, 3),cal_ci(qqq_ci$rPE_b,ci,boot = boot),'\n')
   
-  cat("Total time elapsed:",elapsed_time,attr(elapsed_time,"units"))
+  cat("Total time elapsed:",elapsed_time,attr(elapsed_time,"units"),'\n')
   
+  invisible(obj)
+
 }
 ```
 
 ## Run
+
 
 ```{r}
 library(furrr)
@@ -1770,6 +1873,11 @@ library(doParallel)
 cl <- makeCluster(8)
 registerDoParallel(cl)
 
+```
+
+## lag = 2, M before L, bootstrap
+
+```{r}
 tvmedg(data = dat0,
        fix = c("age","sex","ow","risk"),
        expo = c("Ap"),
@@ -1780,15 +1888,174 @@ tvmedg(data = dat0,
        norev = c("Mp"),
        time = c("mm"),
        LM = F,
-       bootstr = T,
+       boot = T,
        seed = 123,
        mreg = "binomial",
        lreg = c("binomial","gaussian","gaussian"),
        yreg = "binomial",dof = 3,
-       montecarlo = 100,length = 12,
-       parallel=TRUE,iter = 10,ci=.95)
+       montecarlo = 10,length = 12,
+       parallel=TRUE,nboot = 2,ci=.95)
 ```
 
 
+## lag = 3, L before M, no bootstrap
 
+```{r}
+tvmedg(data = dat0,
+       fix = c("age","sex","ow","risk"),
+       expo = c("Ap"),
+       med = c("Mp"),
+       tvar = c("L1","L2","L3"),
+       outc = c("Yp"),
+       lag = 3,
+       norev = c("Mp"),
+       time = c("mm"),
+       LM = T,
+       boot = F,
+       seed = 123,
+       mreg = "binomial",
+       lreg = c("binomial","gaussian","gaussian"),
+       yreg = "binomial",dof = 3,
+       montecarlo = 5,length = 12,
+       parallel=TRUE,nboot = 2,ci=.95)
+```
+
+# Plot function
+
+```{r}
+mytheme <- function(...) {
+  theme_minimal() +
+    theme(
+      plot.title = element_text(size = 14,color = "grey10",  face = "bold", hjust = 0.5),
+      axis.line = element_line(linetype = "solid"),
+      axis.text = element_text(color = "gray10", size = 10),
+      axis.title = element_text(color = "gray10", size = 12),
+      # plot.background = element_blank(),
+      panel.background = element_rect(fill = "white", color = NA),
+      legend.title = element_text(size = 12, face = "bold"),
+      legend.direction = "horizontal",
+      legend.position = "top",
+      legend.background = element_rect(fill = NA, color = NA),
+      legend.text = element_text(size = 12),
+      legend.key.width = unit(1, "line"),
+      strip.text = element_text(size = 12, face = "bold"),
+      strip.background = element_rect(fill = NA, color = NA)
+    )
+}
+```
+
+
+```{r}
+plot.tvmedg <- function(x,what = c("all","cumY","tvY"),...){
+  
+  tv_cumsum <- x$ori_df |>
+    group_by(j) |>
+    summarise(
+      y_prop = mean(Y),
+      y_count = sum(Y)
+    ) |> 
+    ungroup() |>
+    mutate(y_prob_cum = cumsum(y_count)/nrow(df))
+  
+  dat1M <- x$dat_MC |> 
+    mutate(group = if_else(Ay == 1 & Am == 1, "Q(1,1)",
+                           if_else(Ay == 1 & Am ==0, "Q(1,0)", "Q(0,0)")),
+           group = factor(group, labels = c("Q(0,0)", "Q(1,0)", "Q(1,1)")),
+           groupM = factor(Am, label = c("No", "Yes"))) |> 
+    group_by(group, mm) |>
+    summarise(Y = mean(Yp2)) |>
+    ungroup() |>
+    group_by(group) |>
+    mutate(Ysum = cumsum(Y))|>
+    ungroup() 
+  
+  ## cumY
+  
+  cumy_dfplot <- dat1M |> 
+    left_join(tv_cumsum, by = join_by(mm == j))
+  
+  y_limt <- max(cumy_dfplot$Ysum,cumy_dfplot$y_prob_cum,na.rm = T)
+  
+  f_cumY <- cumy_dfplot |>
+    ggplot() +
+    geom_line(aes(x = mm, y = Ysum, color = group), linewidth = 1) +
+    geom_line(aes(x = mm, y = y_prob_cum), color = "gray20", 
+              linewidth = 1, linetype = 2) +
+    scale_color_brewer(palette = "Set1", direction = -1) +
+    scale_y_continuous(limits = c(0, round(y_limt+0.4,1))) +
+    scale_x_continuous(breaks = seq(0, max(dat1M$mm), by = 12)) +
+    mytheme() +
+    labs(x = "Month",
+         y = "%",
+         title = "Cumulative Y (%)",
+         caption = "The dashed line represents the observed %",
+         color = NULL)
+  
+  ## tvY
+  tvy_dfplot <- dat1M |> 
+    left_join(tv_cumsum, by = join_by(mm == j))
+  
+  y_limt2 <- max(tvy_dfplot$Y,tvy_dfplot$y_prop,na.rm=TRUE)
+  
+  f_tvY <- tvy_dfplot |>
+    ggplot() +
+    geom_line(aes(x = mm, y = Y, color = group), linewidth = 1) +
+    geom_line(aes(x = mm, y = y_prop), color = "gray20", 
+              linewidth = 1, linetype = 2) +
+    scale_color_brewer(palette = "Set1", direction = -1) +
+    scale_y_continuous(limits = c(0, round(y_limt2+0.02,1))) +
+    scale_x_continuous(breaks = seq(0, max(dat1M$mm), by = 12)) +
+    mytheme() +
+    labs(x = "Month",
+         y = "%",
+         title = "Y by month (%)",
+         caption = "The dashed line represents the observed %",
+         color = NULL)
+  
+  if (what == c("all")){
+    out_plot <- plot_grid(f_cumY,f_tvY,nrow = 1)
+  } else if (what == "cumY") {
+    out_plot <- f_cumY
+  } else {
+    out_plot <- f_tvY
+  }
+  
+  out_plot
+  
+}
+```
+
+
+# Final run
+
+```{r}
+library(cowplot)
+op <- tvmedg(data = dat0,
+       fix = c("age","sex","ow","risk"),
+       expo = c("Ap"),
+       med = c("Mp"),
+       tvar = c("L1","L2","L3"),
+       outc = c("Yp"),
+       lag = 2,
+       norev = c("Mp"),
+       time = c("mm"),
+       LM = F,
+       boot = T,
+       seed = 123,
+       mreg = "binomial",
+       lreg = c("binomial","gaussian","gaussian"),
+       yreg = "binomial",dof = 3,
+       montecarlo = 100,length = 36,
+       parallel=TRUE,nboot = 5,ci=.95)
+
+
+```
+
+```{r}
+#| out-width: "100%"
+
+plot(op,"all")
+plot(op,"cumY")
+plot(op,"tvY")
+```
 
