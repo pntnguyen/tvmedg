@@ -1,0 +1,60 @@
+---
+title: "run demopkg"
+format:
+  html:
+    toc: true
+    page-layout: full
+    code-fold: show
+    code-tools: true
+editor: visual
+message: false
+warning: false
+---
+
+```{r}
+library(tidyverse)
+library(magrittr)
+library(testthat)
+library(splines)
+library(furrr)
+library(doParallel)
+library(cowplot)
+
+library(demotvmedg)
+```
+
+```{r}
+dat0 <- readRDS("../Data/tvmed_dat100_12mo.RDS")
+
+cl <- makeCluster(8)
+registerDoParallel(cl)
+```
+
+```{r}
+op <- tvmedg(data = dat0,
+       fix = c("age","sex","ow","risk"),
+       expo = c("Ap"),
+       med = c("Mp"),
+       tvar = c("L1","L2","L3"),
+       outc = c("Yp"),
+       lag = 3,
+       norev = c("Mp"),
+       time = c("mm"),
+       LM = T,
+       boot = F,
+       seed = 123,
+       mreg = "binomial",
+       lreg = c("binomial","gaussian","gaussian"),
+       yreg = "binomial",dof = 3,
+       montecarlo = 100,length = 12,
+       parallel=TRUE,nboot = 5,ci=.95)
+```
+
+```{r}
+#| out-width: "100%"
+
+plot(op,"cumY")
+
+plot(op,"tvY")
+```
+

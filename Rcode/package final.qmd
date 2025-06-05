@@ -410,7 +410,6 @@ process_data(
   baseline_mc(montecarlo = 10000)
 ```
 
-
 # g_form function
 
 ```{r}
@@ -423,7 +422,6 @@ rFunc <- function(mod, ndat) {
   return(rbinom(1, size = 1, prob = pred_prob))
 }
 ```
-
 
 ```{r}
 g_form <- function(data, ii = 2, length = 12, am = 1, ay = 0){
@@ -725,8 +723,6 @@ process_data(
   g_form(ii = 44, length = 12, am = 1, ay = 0)
 ```
 
-
-
 # Test
 
 ## Set up
@@ -973,7 +969,6 @@ gform <- function(ii, pgdat, length, am, ay) {
 }
 ```
 
-
 ## Process data function
 
 ::: columns
@@ -1014,7 +1009,6 @@ data_pro <- process_data(
 data_pro$df %>% head()
 ```
 :::
-
 :::
 
 ```{r}
@@ -1150,7 +1144,6 @@ fitR2 <- process_data(
            yreg = "binomial",dof = 3) 
 ```
 :::
-
 :::
 
 ```{r}
@@ -1298,7 +1291,6 @@ fitR2 <- process_data(
            yreg = "binomial",dof = 3) 
 ```
 :::
-
 :::
 
 ```{r}
@@ -1340,7 +1332,6 @@ test_that("fitg function", {
 
 ::: columns
 ::: {.column width="50%"}
-
 ```{r}
 ## seed = 123
 df <- dat0 |> 
@@ -1420,7 +1411,6 @@ fitR2 <- process_data(
   baseline_mc(montecarlo = 10000)
 ```
 :::
-
 :::
 
 ```{r}
@@ -1472,14 +1462,12 @@ test_that("baseline_mc function", {
 
 ::: columns
 ::: {.column width="50%"}
-
 ```{r}
 seed = 123
 set.seed(seed)
 along_redf <- gform(ii = 1, pgdat = MC, length = 12, ay = 1, am = 1) %>% 
   as.data.frame()
 ```
-
 :::
 
 ::: {.column width="50%"}
@@ -1502,11 +1490,8 @@ test_redf <- process_data(
   baseline_mc(montecarlo = 10000) %>% 
   g_form(ii = 1, length = 12, ay = 1, am = 1) %>% data.frame()
 ```
-
 :::
-
 :::
-
 
 ```{r}
 test_that("gform function", {
@@ -1531,14 +1516,12 @@ test_that("gform function", {
 
 ::: columns
 ::: {.column width="50%"}
-
 ```{r}
 seed = 123
 set.seed(seed)
 along_redf <- gform(ii = 2, pgdat = MC, length = 12, ay = 0, am = 0) %>% 
   as.data.frame()
 ```
-
 :::
 
 ::: {.column width="50%"}
@@ -1561,11 +1544,8 @@ test_redf <- process_data(
   baseline_mc(montecarlo = 10000) %>% 
   g_form(ii = 2, length = 12, ay = 0, am = 0) %>% data.frame()
 ```
-
 :::
-
 :::
-
 
 ```{r}
 test_that("gform function", {
@@ -1590,14 +1570,12 @@ test_that("gform function", {
 
 ::: columns
 ::: {.column width="50%"}
-
 ```{r}
 seed = 123
 set.seed(123)
 along_redf <- gform(ii = 2, pgdat = MC, length = 12, ay = 1, am = 0) %>% 
   as.data.frame()
 ```
-
 :::
 
 ::: {.column width="50%"}
@@ -1620,11 +1598,8 @@ test_redf <- process_data(
   baseline_mc(montecarlo = 10000)  %>% 
   g_form(ii = 2, length = 12, ay = 1, am = 0) %>% data.frame()
 ```
-
 :::
-
 :::
-
 
 ```{r}
 test_that("gform function", {
@@ -1662,37 +1637,6 @@ ExtResult2 <- function(data) {
 
 
 ```{r}
-## run parallel function
-
-run_parallel <- function(parallel){
-  
-  if (parallel == TRUE){
-    
-    gform_wrapper2 <- function(iii, data, length) {
-      outdat11 <- g_form(ii = iii,data=data, length = length, ay = 1, am = 1)
-      outdat10 <- g_form(ii = iii,data=data, length = length, ay = 1, am = 0)
-      outdat00 <- g_form(ii = iii,data=data, length = length, ay = 0, am = 0)
-      bind_rows(outdat11, outdat10, outdat00)
-    }
-    
-    resultDatM <- future_map_dfr(1:montecarlo,  
-                                 ~ gform_wrapper2(ii = .x, data = fitR2, length = length))
-  } else {
-    resultDatM <- data.frame()
-    for (iii in 1:montecarlo){
-      outdat11 <- g_form(ii = iii,data=fitR2, length = length, ay = 1, am = 1)
-      outdat10 <- g_form(ii = iii,data=fitR2, length = length, ay = 1, am = 0)
-      outdat00 <- g_form(ii = iii,data=fitR2, length = length, ay = 0, am = 0)
-      resultDatM2 <- rbind(outdat11, outdat10, outdat00)
-      resultDatM <- rbind(resultDatM,resultDatM2)
-    }
-  }
-  
-  resultDatM
-}
-```
-
-```{r}
 cal_ci <- function(data,ci = 0.95,boot = T){
   
   if (boot == F){
@@ -1704,7 +1648,6 @@ cal_ci <- function(data,ci = 0.95,boot = T){
   resu
 }
 ```
-
 
 # Final tvmedg function
 
@@ -1865,7 +1808,6 @@ tvmedg <- function(data,
 
 ## Run
 
-
 ```{r}
 library(furrr)
 library(doParallel)
@@ -1896,7 +1838,6 @@ tvmedg(data = dat0,
        montecarlo = 10,length = 12,
        parallel=TRUE,nboot = 2,ci=.95)
 ```
-
 
 ## lag = 3, L before M, no bootstrap
 
@@ -1944,7 +1885,6 @@ mytheme <- function(...) {
 }
 ```
 
-
 ```{r}
 plot.tvmedg <- function(x,what = c("all","cumY","tvY"),...){
   
@@ -1955,7 +1895,7 @@ plot.tvmedg <- function(x,what = c("all","cumY","tvY"),...){
       y_count = sum(Y)
     ) |> 
     ungroup() |>
-    mutate(y_prob_cum = cumsum(y_count)/nrow(df))
+    mutate(y_prob_cum = cumsum(y_count)/nrow(x$ori_df))
   
   dat1M <- x$dat_MC |> 
     mutate(group = if_else(Ay == 1 & Am == 1, "Q(1,1)",
@@ -2025,7 +1965,6 @@ plot.tvmedg <- function(x,what = c("all","cumY","tvY"),...){
 }
 ```
 
-
 # Final run
 
 ```{r}
@@ -2045,7 +1984,7 @@ op <- tvmedg(data = dat0,
        mreg = "binomial",
        lreg = c("binomial","gaussian","gaussian"),
        yreg = "binomial",dof = 3,
-       montecarlo = 100,length = 36,
+       montecarlo = 100,length = 12,
        parallel=TRUE,nboot = 5,ci=.95)
 
 
@@ -2058,4 +1997,7 @@ plot(op,"all")
 plot(op,"cumY")
 plot(op,"tvY")
 ```
+
+
+
 
