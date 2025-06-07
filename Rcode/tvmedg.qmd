@@ -12,6 +12,8 @@ warning: false
 ---
 
 ```{r}
+# devtools::install_github("pntnguyen/demotvmedg")
+
 library(tidyverse)
 library(magrittr)
 library(testthat)
@@ -41,13 +43,13 @@ op <- tvmedg(data = dat0,
        norev = c("Mp"),
        time = c("mm"),
        LM = T,
-       boot = F,
+       boot = T,
        seed = 123,
        mreg = "binomial",
        lreg = c("binomial","gaussian","gaussian"),
        yreg = "binomial",dof = 3,
        montecarlo = 100,length = 12,
-       parallel=TRUE,nboot = 5,ci=.95)
+       parallel=TRUE,nboot = 2,ci=.95)
 ```
 
 ```{r}

@@ -1984,7 +1984,7 @@ op <- tvmedg(data = dat0,
        mreg = "binomial",
        lreg = c("binomial","gaussian","gaussian"),
        yreg = "binomial",dof = 3,
-       montecarlo = 100,length = 12,
+       montecarlo = 1000,length = 12,
        parallel=TRUE,nboot = 5,ci=.95)
 
 
