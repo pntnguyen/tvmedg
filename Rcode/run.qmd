@@ -1,8 +1,10 @@
 ---
-title: "code run"
+title: "Update tvmedg"
 format:
   html:
-    code-fold: true
+    toc: true
+    page-layout: full
+    code-fold: show
     code-tools: true
 editor: visual
 message: false
@@ -11,182 +13,529 @@ warning: false
 
 ```{r}
 library(tidyverse)
+library(magrittr)
+library(testthat)
 library(splines)
-library(foreach)
-library(doParallel)
-library(DescTools)
 ```
 
 # Import data
 
 ```{r}
-dat <- readRDS("../Data/tvmed_dat100.RDS")
-
-dat <- dat |> 
-  group_by(id) |>
-  mutate(
-    A_lag1 = lag(Ap, n = 1, default = 0),
-    A_lag2 = lag(Ap, n = 2, default = 0),
-    M_lag1 = lag(Mp, n = 1, default = 0),
-    M_lag2 = lag(Mp, n = 2, default = 0),
-    L1_lag1 = lag(L1, n = 1, default = 0),
-    L1_lag2 = lag(L1, n = 2, default = 0),
-    L2_lag1 = lag(L2, n = 1, default = 100),
-    L2_lag2 = lag(L2, n = 2, default = 100),
-    L3_lag1 = lag(L3, n = 1, default = 80),
-    L3_lag2 = lag(L3, n = 2, default = 80)
-  ) |> ungroup()
+dat0 <- readRDS("../Data/tvmed_dat100_12mo.RDS")
+dat0 %>% as.data.frame() %>% as_tibble()
 ```
 
+# Process data function
+
+Em rút gọn continuous exposure còn 2 argument thôi, cont_exp = NULL => binary, cont_exp_std = F giới hạn chỉ xài được khi đã define continous exposure
+
+Về phần splines em định nghĩa là nếu mọi thứ null thì mình smooth time variables với df là 3 luôn, mình có thể có options là nếu mọi thứ NULL thì không smooth time. Do em quên không note nên khúc đó không nhớ nhóm mình có thống nhất với nhau không, em đọc lại study plan thì trước mắt là code theo ý hiểu của em như thế này.
+
+Có một vấn đề mình cần cân nhắc là splines và standardize có apply cho lag luôn không? Em đang code là apply cho lag luôn
+
 ```{r}
-dat %>% as.data.frame() %>% head()
-```
+process_data <- function(basec,expo,med,tvar,lag,outc,time,
+                         norev = NULL,tvar_to_med = FALSE,
+                         cont_exp = NULL,cont_exp_std = F,
+                         sp_list = NULL,
+                         sp_type = NULL,
+                         sp_df= NULL, data){
 
-## Function df_prep
-
-```{r}
-
-df_prep <- function(data) {
+  ## detect which variables are non-reversible
+  if(length(which(expo %in% norev)) != 0){
+    norev_expo <- paste0("A",which(expo %in% norev))
+  } else{
+    norev_expo <- NULL
+  }
   
-  df <- data.frame(id = data$id)
+  if(length(which(med %in% norev)) != 0){
+    norev_med <- paste0("M",which(med %in% norev))
+  } else {
+    norev_med <- NULL
+  }
   
-  # Baseline characteristics
-  df$v1 <- data$age
-  df$v2 <- data$sex
-  df$v3 <- data$ow
-  df$v4 <- data$risk
+  if(length(which(tvar %in% norev)) != 0){
+    norev_tvar <- paste0("L",which(tvar %in% norev))
+  } else {
+    norev_tvar <- NULL
+  }
+  
+  norev_var <- c(norev_expo,norev_med,norev_tvar)
   
   
-  # Time-varying treatment
-  df$A <- data$Ap
-  df$Al1 <- data$A_lag1
-  df$Al2 <- data$A_lag2
+  ## detect which variables in splines list
+  if(length(which(basec %in% sp_list)) != 0){
+    sp_fix <- paste0("v",which(basec %in% sp_list))
+  } else{
+    sp_fix <- NULL
+  }
+  
+  if(length(which(expo %in% sp_list)) != 0){
+    sp_expo <- paste0("A",which(expo %in% sp_list))
+  } else{
+    sp_expo <- NULL
+  }
+  
+  if(length(which(med %in% sp_list)) != 0){
+    sp_med <- paste0("M",which(med %in% sp_list))
+  } else {
+    sp_med <- NULL
+  }
+  
+  if(length(which(tvar %in% sp_list)) != 0){
+    sp_tvar <- paste0("L",which(tvar %in% sp_list))
+  } else {
+    sp_tvar <- NULL
+  }
+  
+  if(length(which(time %in% sp_list)) != 0){
+    sp_time <- paste0("j")
+  } else{
+    sp_time <- NULL
+  }
+  
+  sp_var <- c(sp_fix,sp_expo,sp_med,sp_tvar,sp_time)
+  
+  ## continous exposure
+  if(is.null(cont_exp) & cont_exp_std == T){
+    stop("standardize only applicable when continuous exposure was defined, default is NULL")
+  } else if (is.null(cont_exp) & cont_exp_std == F){
+    ## binary exposure
+    expo_mean <- 0
+  } else if (!is.null(cont_exp) & cont_exp != expo){
+    stop("defined continuous exposure was not the input exposure")
+  } else if (!is.null(cont_exp) & cont_exp_std == F){
+    ## continuous exposure without standardize
+    expo_mean <- mean(data[,expo])
+  } else if (!is.null(cont_exp) & cont_exp_std == T){
+    ## continuous exposure with standardize
+    expo_mean <- 0
+    data[,expo] <- as.numeric(scale(data[,expo]))
+  }
   
   
-  # time-dependent covariate
-  df$T1 <- data$L1
-  df$T1l1 <- data$L1_lag1
-  df$T1l2 <- data$L1_lag2
+  ## column names of time-fixed variables
+  name_v <- paste0("v",1:length(basec))
   
-  df$T2 <- data$L2
-  df$T2l1 <- data$L2_lag1
-  df$T2l2 <- data$L2_lag2
+  out <- data.frame(id = data$id) %>% 
+    mutate(data[,basec]) %>% 
+    magrittr::set_colnames(c("id",name_v))
   
-  df$T3 <- data$L3
-  df$T3l1 <- data$L3_lag1
-  df$T3l2 <- data$L3_lag2
-
-  # Mediator
-  df$M1 <- data$Mp
-  df$M1l1 <- data$M_lag1
-  df$M1l2 <- data$M_lag2
+  ## column names of exposure variables  
+  name_e <- paste0("A",1:length(expo))
   
-  # outcomes
-  df$Y <- data$Yp
+  ## column names of mediator variables  
+  name_me <- paste0("M",1:length(med))
   
-  # Time
-  df$j <- data$mm
+  ## column names of time-varying variables  
+  name_tvar <- paste0("L",1:length(tvar))
   
-  return(df)
+  
+  for (i in 1:lag){
+    
+    ## column name of lag effect on exposure variable
+    co_ex <- paste0(name_e,"l",i)
+    co_me <- paste0(name_me,"l",i)
+    co_tvar <- paste0(name_tvar,"l",i)
+    
+    for (k in 1:length(name_e)){
+      
+      out[,name_e[k]] <- data[,expo[k]]
+      name_ep <- {{co_ex}}[k]
+      out <- out %>% 
+        group_by(id) %>% 
+        mutate(
+          {{name_ep}} := lag(!!sym(name_e[k]),n=i,default = data[1,expo[k]])
+        )
+      
+    } 
+    
+    for (k in 1:length(name_me)){
+      
+      out[,name_me[k]] <- data[,med[k]]
+      name_med <- {{co_me}}[k]
+      out <- out %>% 
+        group_by(id) %>% 
+        mutate(
+          {{name_med}} := lag(!!sym(name_me[k]),n=i,default = data[1,med[k]])
+        ) 
+      
+    }  
+    
+    for (k in 1:length(name_tvar)){
+      
+      out[,name_tvar[k]] <- data[,tvar[k]]
+      name_tv <- {{co_tvar}}[k]
+      out <- out %>% 
+        group_by(id) %>% 
+        mutate(
+          {{name_tv}} := lag(!!sym(name_tvar[k]),n=i,default = data[1,tvar[k]])
+        )
+      
+    }
+    
+    
+  }
+  
+  ## outcome variable
+  out$Y <- data[,outc]
+  
+  ## time variable
+  out$j <- data[,time]
+  
+  
+  kq <- list()
+  kq$df <- out %>% data.frame() 
+  kq$norev_var <- norev_var
+  kq$am <-  expo_mean
+  
+  ## column name
+  
+  eps <- kq$df %>% select(starts_with("A")) %>% colnames()
+  tf <- kq$df %>% select(starts_with("v")) %>% colnames()
+  tva <- kq$df %>% select(starts_with("L")) %>% colnames()
+  mediator <- kq$df %>% select(starts_with("M")) %>% colnames()
+  outcome <- kq$df %>% select(starts_with("Y")) %>% colnames()
+  timee <- kq$df %>% select(starts_with("j")) %>% colnames()
+  
+  
+  ### exposure variable
+  if (any(eps %in% sp_var)){
+    ep_sp <- sp_type[which(sp_var %in% eps)]
+    ep_df <- sp_df[which(sp_var %in% eps)]
+    eps <- paste0("splines::",ep_sp,"(",eps,",df=",ep_df,")")
+  } 
+  
+  ### time-fixed variables
+  if (any(tf %in% sp_var)){
+    tf_sp <- sp_type[which(sp_var %in% tf)]
+    tf_df <- sp_df[which(sp_var %in% tf)]
+    tf_v <- keep(tf, ~ any(str_starts(.x, sp_var)))
+    tf <- paste0("splines::",tf_sp,"(",tf_v,",df=",tf_df,")")
+  } 
+  
+  ### mediator variables
+  if (any(mediator %in% sp_var)){
+    mediator_sp <- sp_type[which(sp_var %in% mediator)]
+    mediator_df <- sp_df[which(sp_var %in% mediator)]
+    mediator_v <- keep(tva, ~ any(str_starts(.x, sp_var)))
+    mediator <- paste0("splines::",mediator_sp,"(",mediator_v,",df=",mediator_df,")")
+  } 
+  
+  ### time-varying variables
+  if (any(tva %in% sp_var)){
+    tva_sp <- sp_type[which(sp_var %in% tva)]
+    tva_df <- sp_df[which(sp_var %in% tva)]
+    tva_v <- keep(tva, ~ any(str_starts(.x, sp_var)))
+    tva <- paste0("splines::",tva_sp,"(",tva_v,",df=",tva_df,")")
+  } 
+  
+  ### time variables
+  if (any(timee %in% sp_var)){
+    timee_sp <- sp_type[which(sp_var %in% timee)]
+    timee_df <- sp_df[which(sp_var %in% timee)]
+    timee <- paste0("splines::",timee_sp,"(jj,df=",timee_df,")")
+  } else {
+    timee <- paste0("splines::","bs","(jj,df=",3,")")
+  }
+  
+  
+  ## formula for M(t)
+  l_tm1 <- tva[!tva %in% name_tvar]
+  m_tm1 <- mediator[!mediator %in% name_me]
+  
+  if (tvar_to_med == FALSE){
+    formula_mt <- list()
+    
+    for (i in 1:length(med)){
+      formula_mt[i] <- paste(name_me[i],"~",paste(c(eps,m_tm1,l_tm1,tf,timee),collapse = " + "))
+    }
+    
+    kq$fm <- formula_mt
+    
+    ## formula for L(t)
+    formular_lt <- list()
+    
+    for (i in 1:length(tvar)){
+      formular_lt[i] <- paste(name_tvar[i],"~",paste(c(eps,mediator,l_tm1,tf,timee),collapse = " + "))
+    }
+    
+    kq$fl <- formular_lt
+    
+    ## formula for Y(t)
+    formular_y <- paste(outcome,"~",paste(c(eps,mediator,tva,tf,timee),collapse = " + "))
+    kq$fy <- formular_y
+    
+  } else {
+    formula_mt <- list()
+    
+    for (i in 1:length(med)){
+      formula_mt[i] <- paste(name_me[i],"~",paste(c(eps,m_tm1,name_tvar,l_tm1,tf,timee),collapse = " + "))
+    }
+    
+    kq$fm <- formula_mt
+    
+    ## formula for L(t)
+    formular_lt <- list()
+    
+    for (i in 1:length(tvar)){
+      formular_lt[i] <- paste(name_tvar[i],"~",paste(c(eps,m_tm1,l_tm1,tf,timee),collapse = " + "))
+    }
+    
+    kq$fl <- formular_lt
+    
+    ## formula for Y(t)
+    formular_y <- paste(outcome,"~",paste(c(eps,tva,mediator,tf,timee),collapse = " + "))
+    kq$fy <- formular_y
+  }
+  
+  return(kq)
 }
 ```
 
-## Function g_boot
+## Default output
 
 ```{r}
+process_data(
+  basec = c("age","sex","ow","risk"),
+  expo = c("L2"),
+  med = c("Mp"),
+  tvar = c("L1","L3"),
+  outc = c("Yp"),
+  lag = 2,
+  time = c("mm"),
+  norev = c("Mp"),
+  tvar_to_med = F,
+  # cont_exp = c("L2"),
+  # cont_exp_std = T,
+  # sp_list = c("mm","L1","sex"),
+  # sp_type = c("ns","bs","bs"),
+  # sp_df= c(3,3,3),
+  data = dat0
+) %>% str()
+```
 
-g_boot <- function(data, length = 36, montecarlo = 0, repdf = 1, seed = 0) { 
-  
-  cat("g-formula for single mediator",'\n')
-  
-  df <- df_prep(data = data)
+## Output with tvar_to_med = TRUE   
 
-  set.seed(seed)
-  cat("Running SEED", seed, "\n")
-  cat("\n")
-  cat("Resampling Data", "\n")
+```{r}
+process_data(
+  basec = c("age","sex","ow","risk"),
+  expo = c("L2"),
+  med = c("Mp"),
+  tvar = c("L1","L3"),
+  outc = c("Yp"),
+  lag = 2,
+  time = c("mm"),
+  norev = c("Mp"),
+  tvar_to_med = T,
+  # cont_exp = c("L2"),
+  # cont_exp_std = T,
+  # sp_list = c("mm","L1","sex"),
+  # sp_type = c("ns","bs","bs"),
+  # sp_df= c(3,3,3),
+  data = dat0
+) %>% str()
+```
+
+
+## Output with continous exposure with standardize, splines, 
+
+```{r}
+process_data(
+  basec = c("age","sex","ow","risk"),
+  expo = c("L2"),
+  med = c("Mp"),
+  tvar = c("L1","L3"),
+  outc = c("Yp"),
+  lag = 2,
+  time = c("mm"),
+  norev = c("Mp"),
+  tvar_to_med = F,
+  cont_exp = c("L2"),
+  cont_exp_std = T,
+  sp_list = c("mm","L1","sex"),
+  sp_type = c("bs","ns","bs"),
+  sp_df= c(3,3,3),
+  data = dat0
+) %>% str()
+```
+
+## Output with continous exposure without standardize, splines
+
+```{r}
+process_data(
+  basec = c("age","sex","ow","risk"),
+  expo = c("L2"),
+  med = c("Mp"),
+  tvar = c("L1","L3"),
+  outc = c("Yp"),
+  lag = 2,
+  time = c("mm"),
+  norev = c("Mp"),
+  tvar_to_med = F,
+  cont_exp = c("L2"),
+  cont_exp_std = F,
+  sp_list = c("mm","L1","sex"),
+  sp_type = c("bs","ns","bs"),
+  sp_df= c(3,3,3),
+  data = dat0
+) %>% str()
+```
+
+# fitg function
+
+Chổ binomial và gaussian em không đổi được, do em assign nó thẳng vô family của glm luôn. Rồi lúc predict ở dưới em extract từ model ra nên nếu chuyển sang lm với logistic nó hơi lằng nhằng :))
+
+```{r}
+## cen_and_scale function
+cen_and_scale <- function(time){
   
-  # Resampling based on id and store in `boot` dataset
+  j_out <- list()
+  
+  jj <- time %>% 
+    scale() 
+  
+  j_out[["jj"]] <- jj %>% as.numeric()
+  j_out[["mean_j"]] <- attributes(jj)$`scaled:center`
+  j_out[["sd_j"]] <- attributes(jj)$`scaled:scale`
+  
+  j_out
+}
+
+resamp <- function(data,boot = FALSE){
+
+  df <- data
+
+  # set.seed(seed)
+  # cat("Running SEED", seed, "\n")
+  # cat("\n")
+  # cat("Resampling Data", "\n")
+  
   clusters <- names(table(df$id))
   index <- sample(1:length(clusters), length(clusters), replace = TRUE)
   bb <- table(clusters[index])
-  boot <- NULL
+  boot_df <- NULL
   
-  if(seed == 0) {
+  if(boot == F) {
     # not doing bootstrap
-    boot <- df 
+    boot_df <- df 
   } else {
     for(zzz in 1:max(bb)) {
       # Loop over repeated id
       cc <- df[df$id %in% names(bb[bb %in% c(zzz:max(bb))]), ]
       cc$bid <- paste0(cc$id, zzz)
-      boot <- rbind(boot, cc)
+      boot_df <- rbind(boot_df, cc)
     }
   }
   
+  boot_df$jj <- cen_and_scale(boot_df$j)$jj
   
-  # Check boot data
-  cat("Resampled data identical to original for seed =", seed, "?:", identical(boot, df),'\n')
+  boot_df
+}
+
+
+fitg <- function(data,boot = FALSE,
+                 mreg = "binomial",
+                 lreg = c("binomial","gaussian","gaussian"),
+                 yreg = "binomial"){
   
+  res_df <- resamp(data = data$df,boot = boot)
   
+  fitR <- list()
   
-  # Centering and scaling the time-scale variable
-  boot$jj <- scale(boot$j)
-  mean_j <- attributes(boot$jj)$`scaled:center`
-  sd_j <- attributes(boot$jj)$`scaled:scale`
-  boot$jj <- as.numeric(boot$jj)
+  fitR$df <- res_df %>% as_tibble()
   
   #----- fit parametric models for
   #--- Mediator models
   
-  mM1 <- function(k){
-    fitM1 <- glm(M1 ~ A + Al1 + Al2 + M1l1 + M1l2 + T1l1 + T1l2 + T2l1 + T2l2 + T3l1 + T3l2 + 
-                   v1 + v2 + v3 + v4 + splines::bs(jj, df = 3), 
-                 family = binomial, data = boot)
-    return(fitM1)
+  if(length(mreg) != length(data$fm)){
+    stop("the defined regression of M is not equal")
   }
   
-  # PseudoR2(fitM1)
+  for (i in 1:length(data$fm)){
+    fitM <- paste0(data$fm[[i]])
+    fitR$M[[i]] <- glm(fitM ,family = mreg[i], data = res_df) 
+  }
+  
+  
   #--- Covariate models
-  
-  mT1 <- function(k){
-    fitT1 <- glm(T1 ~ A + Al1 + Al2 + M1 + M1l1 + M1l2 + T1l1 + T1l2 + T2l1 + T2l2 + T3l1 + T3l2 + 
-                   v1 + v2 + v3 + v4 + splines::bs(jj, df = 3), 
-                 family = binomial, data = boot)
-    return(fitT1)
+  if(length(lreg) != length(data$fl)){
+    stop("the defined regression of L is not equal")
   }
   
-  # PseudoR2(fitT1)
-  
-  mT2 <- function(k){
-    fitT2 <- lm(T2 ~ A + Al1 + Al2 + M1 + M1l1 + M1l2 + T1 + T1l1 + T1l2 + T2l1 + T2l2 + T3l1 + T3l2 + 
-                  v1 + v2 + v3 + v4 + splines::bs(jj, df = 3), data = boot)
-    return(fitT2)
+  for (i in 1:length(data$fl)){
+    fitL <- paste0(data$fl[[i]])
+    fitR$L[[i]] <- glm(fitL ,family = lreg[i], data = res_df) 
   }
   
-  mT3 <- function(k){
-    fitT3 <- lm(T3 ~ A + Al1 + Al2 + M1 + M1l1 + M1l2 + T1 + T1l1 + T1l2 + T2 + T2l1 + T2l2 + T3l1 + T3l2 + 
-                  v1 + v2 + v3 + v4 + splines::bs(jj, df = 3), data = boot)
-    return(fitT3)
-  }
+  #--- Outcome model: 
+  fitY <- paste0(data$fy)
+  fitR$Y <-  glm(fitY ,family = yreg, data = res_df) 
   
-  # Outcome model: E(Y|a, m, l, v)
+  fitR$norev_var <- data$norev_var
   
-  mY <- function(k) {
-    fitY <- glm(Y ~ A + Al1 + Al2 + M1 + M1l1 + M1l2 + T1 + T1l1 + T1l2 + T2 + T2l1 + T2l2 + 
-                  T3 + T3l1 + T3l2 +  v1 + v2 + v3 + v4 + splines::bs(jj, df = 3), 
-                family = binomial, data = boot)
-    return(fitY)
-  }
+  fitR$am <- data$am
+  
+  fitR
+}
+```
 
-  # PseudoR2(fitY)
+## Output with continuous exposure
+
+Chổ này run ra coefficient của mình bị NA. Em có check lại bằng skeleton code thì cũng v. Em nghĩ do data mới này có vấn đề. Em import lại data chưa có 12mo thì mọi thứ bình thường á a.
+
+```{r}
+process_data(
+  basec = c("age","sex","ow","risk"),
+  expo = c("L2"),
+  med = c("Mp"),
+  tvar = c("L1","L3"),
+  outc = c("Yp"),
+  lag = 2,
+  time = c("mm"),
+  norev = c("Mp"),
+  tvar_to_med = F,
+  cont_exp = c("L2"),
+  cont_exp_std = T,
+  data = dat0
+) %>%  fitg(boot=T,
+            mreg = "binomial",
+            lreg = c("binomial","gaussian"),
+            yreg = "binomial")
+```
+
+
+## data cũ
+
+```{r}
+dat1 <- readRDS("../Data/tvmed_dat100.RDS")
+process_data(
+  basec = c("age","sex","ow","risk"),
+  expo = c("L2"),
+  med = c("Mp"),
+  tvar = c("L1","L3"),
+  outc = c("Yp"),
+  lag = 2,
+  time = c("mm"),
+  norev = c("Mp"),
+  tvar_to_med = F,
+  cont_exp = c("L2"),
+  cont_exp_std = T,
+  data = dat1
+) %>%  fitg(boot=T,
+            mreg = "binomial",
+            lreg = c("binomial","gaussian"),
+            yreg = "binomial")
+```
+
+
+
+# Baseline_mc function
+
+```{r}
+baseline_mc <- function(data = fitR2,montecarlo = 10000){
   
-  # Fit all models and save in a list
-  mR <- c(mM1, mY, mT1, mT2, mT3)
-  fitR <- lapply(1:5,function(x) mR[[x]](k))
-  
-  
-  
+  boot <- data$df
   # Select baseline visit
   df0 <- boot[boot$j==1, ]
   
@@ -194,304 +543,597 @@ g_boot <- function(data, length = 36, montecarlo = 0, repdf = 1, seed = 0) {
   
   MC <- NULL
   
-  if (montecarlo == 0) {
-    MC <- do.call(rbind, replicate(repdf, df0, simplify = FALSE))
-    MC$idsim <- 1:nrow(MC)
-    
-  } else {
-    samples <- sample(df0$idn, size = montecarlo, replace = T)
-    bb <- table(samples)
-    
-    for(zzz in 1:max(bb)) {
-      cc <- df0[df0$idn %in% names(bb[bb %in% c(zzz:max(bb))]), ]
-      cc$bid <- paste0(cc$idn, zzz)
-      MC <- rbind(MC, cc)
-    }
-    
-    MC$idsim <- 1:montecarlo
+  samples <- sample(df0$idn, size = montecarlo, replace = T)
+  bb <- table(samples)
+  
+  for(zzz in 1:max(bb)) {
+    cc <- df0[df0$idn %in% names(bb[bb %in% c(zzz:max(bb))]), ]
+    cc$bid <- paste0(cc$idn, zzz)
+    MC <- rbind(MC, cc)
   }
   
+  MC$idsim <- 1:montecarlo
+  
+  data$res_df <- MC %>% as_tibble()
+  data
+}
+```
 
-  
-  # pgf function for predicting follow-up
-  #-----------------------------------------------------------------------------
-  
-  
-  # pgf function
-  gform <- function(ii, pgdat, length, am, ay) {
-    
-    pFunc <- function(mod, ndat) {
-      as.numeric(predict(mod, newdata = ndat, type = "response") > runif(1))
-    }
-    
-    rFunc <- function(mod, ndat) {
-      pred_prob <- predict(mod, newdata = ndat, type = "response")
-      return(rbinom(1, size = 1, prob = pred_prob))
-    }
-    
-    d <- pgdat
-    d <- d[d$idsim==ii, ]
-    
-    id <- d$idsim
-    id_ori <- d$id
-    
-    length <- length
-    
-    
-    # cat("...", paste0(ii, "(", id_ori, ")"))
-    
-    
-    
-    # Baseline covariates
-    Vp <- d[, c("v1", "v2", "v3", "v4")]
-    
-    T1p <- T2p <- T3p  <- M1p <- Yp <- mm <- numeric()
-    T1mp <- T2mp <- T3mp <- numeric()
-    
-    mm[1] <- j <- 1
-    
-    
-    M1p[1] <- 0
-    Yp[1] <- 0
-    
-    # Time-varying covariates contribute to outcome model
-    T1p[1] <- d$T1
-    T2p[1] <- d$T2
-    T3p[1] <- d$T3
-    
-    # Time-varying covariates contribute to mediator model
-    T1mp[1] <- d$T1
-    T2mp[1] <- d$T2
-    T3mp[1] <- d$T3
-    
-    
-    for (l in 2:length) {
-      
-      if (Yp[l-1]==0) {
-        
-        if (l == 2) {
-          T1l2 <- T1p[1]
-          T2l2 <- T2p[1]
-          T3l2 <- T3p[1]
-          
-          T1ml2 <- T1mp[1]
-          T2ml2 <- T2mp[1]
-          T3ml2 <- T3mp[1]
-          M1l2 <- M1p[1]
-          
-        } else {
-          
-          T1l2 <- T1p[l-2]
-          T2l2 <- T2p[l-2]
-          T3l2 <- T3p[l-2]
-          T1ml2 <- T1mp[l-2]
-          T2ml2 <- T2mp[l-2]
-          T3ml2 <- T3mp[l-2]
-          M1l2 <- M1p[l-2]
-          
-        }
-        
-          T1l1 <- T1p[l-1]
-          T2l1 <- T2p[l-1]
-          T3l1 <- T3p[l-1]
-          T1ml1 <- T1mp[l-1]
-          T2ml1 <- T2mp[l-1]
-          T3ml1 <- T3mp[l-1]
-          
-          M1l1 <- M1p[l-1]
-        
-        
-        
-        # Predict mediator
-        dM1p <- data.frame(Vp, A = am, Al1 = am, Al2 = am, M1l1, M1l2, T1l1 = T1ml1, T1l2 = T1ml2, 
-                           T2l1 = T2ml1, T2l2 = T2ml2, T3l1 = T3ml1, T3l2 = T3ml2,
-                           jj = as.numeric((l-mean_j)/sd_j))
-        
-        if (M1p[l - 1] == 0) {
-          # M1p[l] <- pFunc(fitR[[1]], dM1p)
-          M1p[l] <- rFunc(fitR[[1]], dM1p)
-        } else {
-          M1p[l] <- 1
-        }
-        
-        
-        
-        # Predict time-varying covariates (contribute to mediator models)
-        # T1
-        dT1mp <- data.frame(Vp, A = am, Al1 = am, Al2 = am, M1 = M1p[l], M1l1, M1l2, 
-                            T1l1 = T1ml1, T1l2 = T1ml2, 
-                            T2l1 = T2ml1, T2l2 = T2ml2, 
-                            T3l1 = T3ml1,T3l2 = T3ml2,
-                            jj = as.numeric((l-mean_j)/sd_j))
-        T1mp[l] <- pFunc(fitR[[3]], dT1mp)
-        
-        # T2
-        dT2mp <- data.frame(Vp, A = am, Al1 = am, Al2 = am, M1 = M1p[l], M1l1, M1l2, 
-                            T1 = T1mp[l], T1l1 = T1ml1, T1l2 = T1ml2, 
-                            T2l1 = T2ml1, T2l2 = T2ml2, 
-                            T3l1 = T3ml1, T3l2 = T3ml2,
-                            jj = as.numeric((l-mean_j)/sd_j))
-        T2mp[l] <- predict(fitR[[4]], dT2mp)
-        
-        # T3
-        dT3mp <- data.frame(Vp, A = am, Al1 = am, Al2 = am, M1 = M1p[l], M1l1, M1l2,
-                            T1 = T1mp[l], T1l1 = T1ml1, T1l2 = T1ml2, 
-                            T2 = T2mp[l], T2l1 = T2ml1, T2l2 = T2ml2, 
-                            T3l1 = T3ml1, T3l2 = T3ml2,
-                            jj = as.numeric((l-mean_j)/sd_j))
-        T3mp[l] <- predict(fitR[[5]], dT3mp)
-      
-        
-        # Predict time-varying covariates (contribute to outcome models, if ay != am)
-        # If ay = am ==> simply covariates take the same values between two models
-        
-        if (ay != am) {
-        # T1
-        dT1p <- data.frame(Vp, A = ay, Al1 = ay, Al2 = ay, M1 = M1p[l], M1l1, M1l2, 
-                           T1l1, T1l2, 
-                           T2l1, T2l2,  
-                           T3l1, T3l2, 
-                           jj = as.numeric((l-mean_j)/sd_j))
-        T1p[l] <- pFunc(fitR[[3]], dT1p)
-        
-        # T2
-        dT2p <- data.frame(Vp, A = ay, Al1 = ay, Al2 = ay, M1 = M1p[l], M1l1, M1l2, 
-                           T1 = T1p[l], T1l1, T1l2, 
-                           T2l1, T2l2,  
-                           T3l1, T3l2, 
-                           jj = as.numeric((l-mean_j)/sd_j))
-        T2p[l] <- predict(fitR[[4]], dT2p)
-        
-        # T3
-        dT3p <- data.frame(Vp, A = ay, Al1 = ay, Al2 = ay, M1 = M1p[l], M1l1, M1l2, 
-                           T1 = T1p[l], T1l1, T1l2, 
-                           T2 = T2p[l], T2l1, T2l2,  
-                           T3l1, T3l2, 
-                           jj = as.numeric((l-mean_j)/sd_j))
-        T3p[l] <- predict(fitR[[5]], dT3p)
+## Output with standardized continous exposure 
 
+```{r}
+process_data(
+  basec = c("age","sex","ow","risk"),
+  expo = c("L2"),
+  med = c("Mp"),
+  tvar = c("L1","L3"),
+  outc = c("Yp"),
+  lag = 2,
+  time = c("mm"),
+  norev = c("Mp"),
+  tvar_to_med = F,
+  cont_exp = c("L2"),
+  cont_exp_std = T,
+  data = dat0
+) %>%  fitg(boot=T,
+            mreg = "binomial",
+            lreg = c("binomial","gaussian"),
+            yreg = "binomial")%>% 
+  baseline_mc(montecarlo = 10000)
+```
+
+# g_form function
+
+```{r}
+rFunc <- function(mod, ndat) {
+  pred_prob <- predict(mod, newdata = ndat, type = "response")
+  return(rbinom(1, size = 1, prob = pred_prob))
+}
+
+g_form <- function(data = fitR2, ii = 2, followup = 12, am = 1, ay = 0){
+  
+  norev_var <- data$norev_var
+  
+  dddd <- data$res_df %>% data.frame()
+  
+  lagg <- dddd %>% dplyr::select(contains("L1l")) %>% ncol() 
+  
+  d2 <- dddd[dddd$idsim==ii, ]
+  
+  id <- d2$idsim
+  id_ori <- d2$id
+  
+  followup <- followup
+  
+  # Baseline covariates
+  Vp <- d2 %>% select(starts_with("v"))
+  
+  Yp2 <- mm <- numeric()
+  
+  mm[1:lagg-1] <- j <- 1
+  
+  Yp2[1:lagg-1] <- 0
+  
+  timee <- cen_and_scale(data$df$j)
+  
+  # mediator
+  Mp <- matrix(ncol = length(data$M)) %>% data.frame()
+  names(Mp) <- paste0("M",1:length(data$M))
+  Mp[1:lagg-1,] <- d2 %>% select(names(Mp)) 
+  
+  
+  # time-varying covariates (contribute to mediator models)
+  Lmp <- matrix(ncol = length(data$L)) %>% data.frame()
+  names(Lmp) <- paste0("L",1:length(data$L))
+  Lmp[1:lagg-1,] <- d2 %>% select(names(Lmp)) 
+  # time-varying covariates (contribute to outcome models)
+  Lp <- Lmp
+  
+  for (l in lagg:followup) {
+    
+    if (Yp2[l-1]==1) {
+      break
+    } else{
+      
+      # Predict mediator
+      var_fm <- attr(data$M[[1]]$terms, "term.labels")
+      
+      var_fm <- gsub(".*\\(([^,]+),.*", "\\1", var_fm)
         
+      var_fm <- var_fm[-length(var_fm)] 
+      
+      dfMp <- d2 %>% select(matches(var_fm)) %>% 
+        mutate(jj = (l-timee$mean_j)/timee$sd_j)
+      
+      dfMp[startsWith(colnames(dfMp), "A")] <- am
+      
+      
+      if (l > lagg){
         
-        } else {
-          T1p[l] <- T1mp[l]
-          T2p[l] <- T2mp[l]
-          T3p[l] <- T3mp[l]
+        for (zz in 1:(lagg)){
+          term <- paste0("l",zz)
+          # L lag
+          dfMp[startsWith(colnames(dfMp), "L") & endsWith(colnames(dfMp), term)] <- Lmp[l-zz,]
+          # M lag
+          dfMp[startsWith(colnames(dfMp), "M") & endsWith(colnames(dfMp), term)] <- Mp[l-zz,]
         }
         
-        # Y
-        dYp <- data.frame(Vp, A = ay, Al1 = ay, Al2 = ay, M1 = M1p[l], M1l1, M1l2, 
-                          T1 = T1p[l], T1l1, T1l2, 
-                          T2 = T2p[l], T2l1, T2l2,
-                          T3 = T3p[l], T3l1, T3l2, 
-                          jj = as.numeric((l-mean_j)/sd_j))
-        Yp[l] <- pFunc(fitR[[2]], dYp)
-        
-      } else {
-        break
       }
       
-      mm[l] <- l
+      
+      for (x in 1:length(data$M)){
+        
+        M_reg <- data$M[[x]]$family$family
+        
+        if (names(Mp[x]) %in% norev_var){
+          
+          if (M_reg == "binomial" & Mp[l-1,x] == 1) {
+            Mp[l,x] <- 1
+          } else {
+            Mp[l,x] <- case_when(
+              M_reg  == "binomial" ~ rFunc(data$M[[x]], dfMp),
+              M_reg  == "gaussian" ~ predict(data$M[[x]], dfMp)
+            )
+          }
+          
+        } else {
+          
+          Mp[l,x] <- case_when(
+            M_reg  == "binomial" ~ rFunc(data$M[[x]], dfMp),
+            M_reg  == "gaussian" ~ predict(data$M[[x]], dfMp)
+          )
+          
+        }
+        
+      }
+      
+      # Predict time-varying covariates (contribute to mediator models)
+      # L
+      var_fl <- attr(data$L[[1]]$terms, "term.labels")
+      var_fl <- gsub(".*\\(([^,]+),.*", "\\1", var_fl)
+      var_fl <- var_fl[-length(var_fl)] 
+      dfLmp <- d2 %>% select(matches(var_fl)) %>% 
+        mutate(jj = (l-timee$mean_j)/timee$sd_j)
+      dfLmp[startsWith(colnames(dfLmp), "A")] <- am
+      dfLmp[colnames(dfLmp) == colnames(Mp)] <- Mp[l,]
+      
+      
+      if (l > lagg){
+        
+        for (zz in 1:lagg){
+          term <- paste0("l",zz)
+          # L lag
+          dfLmp[startsWith(colnames(dfLmp), "L") & endsWith(colnames(dfLmp), term)] <- Lmp[l-zz,]
+          # M lag
+          dfLmp[startsWith(colnames(dfLmp), "M") & endsWith(colnames(dfLmp), term)] <- Mp[l-zz,]
+        }
+        
+      }
+      
+      for (x in 1:length(data$L)){
+        
+        L_reg <- data$L[[x]]$family$family
+        
+        if (names(Lmp[x]) %in% norev_var){
+          if (L_reg == "binomial" & Lmp[l-1,x] == 1){
+            
+            Lmp[l,x] <- 1
+            
+          } else {
+            
+            Lmp[l,x] <- case_when(
+              L_reg  == "binomial" ~ rFunc(data$L[[x]], dfLmp),
+              L_reg  == "gaussian" ~ predict(data$L[[x]], dfLmp)
+            )
+            
+          }
+          
+        } else{
+          
+          Lmp[l,x] <- case_when(
+            L_reg  == "binomial" ~ rFunc(data$L[[x]], dfLmp),
+            L_reg  == "gaussian" ~ predict(data$L[[x]], dfLmp)
+          )
+          
+        }
+        
+      }
+      
+      # Predict time-varying covariates (contribute to outcome models, if ay != am)
+      if (ay != am) {
+        dfLp <- d2 %>% select(matches(var_fl)) %>% 
+          mutate(jj = (l-timee$mean_j)/timee$sd_j)
+        dfLp[startsWith(colnames(dfLp), "A")] <- ay
+        dfLp[colnames(dfLp) == colnames(Mp)] <- Mp[l,]
+        
+        if (l > lagg){
+          
+          for (zz in 1:lagg){
+            term <- paste0("l",zz)
+            # L lag
+            dfLp[startsWith(colnames(dfLp), "L") & endsWith(colnames(dfLp), term)] <- Lp[l-zz,]
+            # M lag
+            dfLp[startsWith(colnames(dfLp), "M") & endsWith(colnames(dfLp), term)] <- Mp[l-zz,]
+          }
+          
+        }
+        
+        for (x in 1:length(data$L)){
+          
+          L_reg <- data$L[[x]]$family$family
+          
+          if (names(Lp[x]) %in% norev_var){
+            if (L_reg == "binomial" & Lp[l-1,x] == 1){
+              
+              Lp[l,x] <- 1
+              
+            } else {
+              
+              Lp[l,x] <- case_when(
+                L_reg  == "binomial" ~ rFunc(data$L[[x]], dfLp),
+                L_reg  == "gaussian" ~ predict(data$L[[x]], dfLp)
+              )
+              
+            }
+            
+          } else {
+            
+            Lp[l,x] <- case_when(
+              L_reg  == "binomial" ~ rFunc(data$L[[x]], dfLp),
+              L_reg  == "gaussian" ~ predict(data$L[[x]], dfLp)
+            )
+            
+          }
+          
+        }
+        
+      } else{
+        Lp <- Lmp
+      }
+      
+      # Y
+      var_y <- attr(data$Y$terms, "term.labels")
+      var_y <- gsub(".*\\(([^,]+),.*", "\\1", var_y)
+      var_y <- var_y[-length(var_y)] 
+      dfYp <- d2 %>% select(matches(var_y)) %>% 
+        mutate(jj = (l-timee$mean_j)/timee$sd_j)
+      dfYp[startsWith(colnames(dfYp), "A")] <- ay
+      dfYp[colnames(dfYp) %in% colnames(Mp)] <- Mp[l,]
+      dfYp[colnames(dfYp) %in% colnames(Lp)] <- Lp[l,] 
+      
+      if (l > lagg){
+        
+        for (zz in 1:lagg){
+          term <- paste0("l",zz)
+          # L lag
+          dfYp[startsWith(colnames(dfYp), "L") & endsWith(colnames(dfYp), term)] <- Lp[l-zz,]
+          # M lag
+          dfYp[startsWith(colnames(dfYp), "M") & endsWith(colnames(dfYp), term)] <- Mp[l-zz,]
+        }
+        
+      }
+      
+      Yp2[l] <- rFunc(data$Y, dfYp)
       
     }
     
+    mm[l] <- l
+  }
+  
+  colnames(Lmp) <- paste0("Lmp",1:length(data$L))
+  colnames(Lp) <- paste0("Lp",1:length(data$L))
+  
+  # boot_num <- seed
+  gdat2 <- data.frame(id, id_ori, mm, Ay = ay, Am = am, Mp, Yp2,
+                      Lmp, Lp, Vp)
+  gdat2$lastid <- as.numeric(!duplicated(gdat2$id, fromLast = T))
+  return(gdat2)
+}
+```
+
+## Output with continous exposuse and not standardize
+
+```{r}
+fitR2 <- process_data(
+  basec = c("age","sex","ow","risk"),
+  expo = c("L2"),
+  med = c("Mp"),
+  tvar = c("L1","L3"),
+  outc = c("Yp"),
+  lag = 2,
+  time = c("mm"),
+  norev = c("Mp"),
+  tvar_to_med = F,
+  cont_exp = c("L2"),
+  cont_exp_std = F,
+       sp_list = c("age","mm","L1"),
+       sp_type = c("bs","bs","ns"),
+       sp_df= c(3,3,3),
+  data = dat0
+) %>%  fitg(boot=T,
+            mreg = "binomial",
+            lreg = c("binomial","gaussian"),
+            yreg = "binomial")%>% 
+  baseline_mc(montecarlo = 10000)
+
+```
+
+```{r}
+am <- fitR2$am
+fitR2 %>% g_form(ii = 2, followup = 12, am = am+1, ay = am+1)
+fitR2 %>% g_form(ii = 2, followup = 12, am = am+1, ay = am)
+fitR2 %>% g_form(ii = 2, followup = 12, am = am, ay = am)
+```
+
+
+# Additional function
+
+```{r}
+ExtResult2 <- function(data,am) {
+  Q11 <- data |> filter(lastid == 1 & Ay ==am+1 & Am ==am+1)
+  Q10 <- data |> filter(lastid == 1 & Ay ==am+1 & Am ==am)
+  Q00 <- data |> filter(lastid == 1 & Ay ==am & Am ==am)
+  
+  qq <- data.frame(mQ11 = mean(Q11$Yp2),
+                   mQ10 = mean(Q10$Yp2),
+                   mQ00 = mean(Q00$Yp2))
+  qq
+}
+```
+
+
+```{r}
+cal_ci <- function(data,ci = 0.95,boot = T){
+  
+  if (boot == F){
+    resu <- NULL
+  } else {
+    qnt <- quantile(data, na.rm = TRUE, probs = c((1-ci)/2,1 - (1-ci)/2))
+    resu <- paste0("(",round(qnt[1],3),",",round(qnt[2],3),")")
+  }
+  resu
+}
+```
+
+# Final tvmedg function
+
+```{r}
+tvmedg <- function(data,basec,expo,med,tvar,outc,time,lag = 2,
+                   norev = NULL, cont_exp = NULL,cont_exp_std = F,
+                   tvar_to_med = F,
+                   mreg = "binomial",
+                   lreg = c("binomial","gaussian","gaussian"),
+                   yreg = "binomial",
+                   sp_list = NULL,sp_type = NULL,sp_df= NULL,
+                   followup = 12,
+                   seed = 0,montecarlo = 10,boot = FALSE,nboot = 1,ci = .95,
+                   parallel=TRUE){
+  
+  set.seed(seed)
+  
+  start_time <- Sys.time()
+  
+  qqq <- matrix(ncol = 3) %>% data.frame()
+  colnames(qqq) <- c("mQ11","mQ10","mQ00")
+  
+  qqq_ci <- matrix(ncol = 3) %>% data.frame()
+  colnames(qqq_ci) <- c("mQ11","mQ10","mQ00")
+  
+  
+  ## point estimate
+  
+  fitR2 <- process_data(
+    basec = basec,
+    expo = expo,
+    med = med,
+    tvar = tvar,
+    outc = outc,
+    lag = lag,
+    time = time,
+    norev = norev,
+    tvar_to_med = tvar_to_med,
+    cont_exp = cont_exp,
+    cont_exp_std = cont_exp_std,
+    sp_list = sp_list,
+    sp_type = sp_type,
+    sp_df = sp_df,
+    data = data
+  )  %>% 
+    fitg(boot=boot,
+         mreg = mreg,
+         lreg = lreg,
+         yreg = yreg) %>% 
+    baseline_mc(montecarlo = montecarlo)
+  
+  am <- fitR2$am
+  
+  if (parallel == TRUE){
     
-    boot_num <- seed
-    gdat <- data.frame(boot_num, id, id_ori, mm, Ay = ay, Am = am, M1p, Yp,
-                       T1mp, T1p, T2mp, T2p, T3mp, T3p, Vp)
-    gdat$lastid <- as.numeric(!duplicated(gdat$id, fromLast = T))
-    return(gdat)
+    gform_wrapper2 <- function(iii, data, followup) {
+      outdat11 <- g_form(ii = iii,data=data, followup = followup, ay = am+1, am = am+1)
+      outdat10 <- g_form(ii = iii,data=data, followup = followup, ay = am+1, am = am)
+      outdat00 <- g_form(ii = iii,data=data, followup = followup, ay = am, am = am)
+      bind_rows(outdat11, outdat10, outdat00)
+    }
+    
+    resultDatM <- future_map_dfr(1:montecarlo,  
+                                 ~ gform_wrapper2(ii = .x, data = fitR2, followup = followup))
+  } else {
+    resultDatM <- data.frame()
+    for (iii in 1:montecarlo){
+      outdat11 <- g_form(ii = iii,data=data, followup = followup, ay = am+1, am = am+1)
+      outdat10 <- g_form(ii = iii,data=data, followup = followup, ay = am+1, am = am)
+      outdat00 <- g_form(ii = iii,data=data, followup = followup, ay = am, am = am)
+      resultDatM2 <- rbind(outdat11, outdat10, outdat00)
+      resultDatM <- rbind(resultDatM,resultDatM2)
+    }
   }
   
-  maxiter <- ifelse(montecarlo == 0, nrow(MC), montecarlo)
+  qqq <- ExtResult2(resultDatM,am = am) %>% mutate(
+    rIE_b = mQ11 - mQ10,
+    rDE_b = mQ10 - mQ00,
+    rTE_b = mQ11 - mQ00,
+    rPE_b = rIE_b/ rTE_b
+  )
   
-  # cat("Number of replicates for baseline", maxiter, "\n")
-
-  resultDat1M <- foreach (iii = 1:maxiter, .combine = rbind) %dopar% {
-    outdat11 <- gform(ii = iii, pgdat = MC, length = length, ay = 1, am = 1)
-    outdat10 <- gform(ii = iii, pgdat = MC, length = length, ay = 1, am = 0)
-    outdat00 <- gform(ii = iii, pgdat = MC, length = length, ay = 0, am = 0)
-    rbind(outdat11, outdat10, outdat00)
+  if (boot == TRUE){
+    
+    for (it in 1:nboot){
+      
+      ## boostrap
+      fitR2a <- process_data(
+        basec = basec,
+        expo = expo,
+        med = med,
+        tvar = tvar,
+        outc = outc,
+        lag = lag,
+        time = time,
+        norev = norev,
+        tvar_to_med = tvar_to_med,
+        cont_exp = cont_exp,
+        cont_exp_std = cont_exp_std,
+        sp_list = sp_list,
+        sp_type = sp_type,
+        sp_df = sp_df,
+        data = data)  %>% 
+        fitg(boot=boot,
+             mreg = mreg,
+             lreg = lreg,
+             yreg = yreg) %>% 
+        baseline_mc(montecarlo = montecarlo)
+      
+      am_ci <- fitR2a$am
+      
+      ## extract mean of q11,q10,q00 of the ith iter
+      if (parallel == TRUE){
+        
+        gform_wrapper2 <- function(iii, data, followup) {
+          outdat11 <- g_form(ii = iii,data=data, followup = followup, ay = am_ci+1, am = am_ci+1)
+          outdat10 <- g_form(ii = iii,data=data, followup = followup, ay = am_ci+1, am = am_ci)
+          outdat00 <- g_form(ii = iii,data=data, followup = followup, ay = am_ci, am = am_ci)
+          bind_rows(outdat11, outdat10, outdat00)
+        }
+        
+        resultDatM_ci <- future_map_dfr(1:montecarlo,  
+                                        ~ gform_wrapper2(ii = .x, data = fitR2a, followup = followup))
+      } else {
+        resultDatM <- data.frame()
+        for (iii in 1:montecarlo){
+          outdat11 <- g_form(ii = iii,data=data, followup = followup, ay = am_ci+1, am = am_ci+1)
+          outdat10 <- g_form(ii = iii,data=data, followup = followup, ay = am_ci+1, am = am_ci)
+          outdat00 <- g_form(ii = iii,data=data, followup = followup, ay = am_ci, am = am_ci)
+          resultDatM2_ci <- rbind(outdat11, outdat10, outdat00)
+          resultDatM_ci <- rbind(resultDatM_ci,resultDatM2_ci)
+        }
+      }
+      
+      qqq_ci[it,] <- ExtResult2(resultDatM_ci,am = am_ci)
+    }
+    
+    qqq_ci <- qqq_ci %>% mutate(
+      rIE_b = mQ11 - mQ10,
+      rDE_b = mQ10 - mQ00,
+      rTE_b = mQ11 - mQ00,
+      rPE_b = rIE_b/ rTE_b
+    )
+    
   }
   
-  return(resultDat1M)
-}
-```
-
-## Function ExtResult
-
-```{r}
-
-ExtResult <- function(data) {
-  Q11 <- data |> filter(lastid == 1 & Ay ==1 & Am ==1)
-  Q10 <- data |> filter(lastid == 1 & Ay ==1 & Am ==0)
-  Q00 <- data |> filter(lastid == 1 & Ay ==0 & Am ==0)
+  end_time <- Sys.time()
+  elapsed_time <- end_time - start_time
   
-  cat("Q(1,1):", round(mean(Q11$Yp), 3),'\n')
-  cat("Q(1,0):", round(mean(Q10$Yp), 3),'\n')
-  cat("Q(0,0):", round(mean(Q00$Yp), 3),'\n')
+  obj <- list()
   
-  cat("Indirect:", round(mean(Q11$Yp) - mean(Q10$Yp), 3),'\n')
-  cat("Direct:", round(mean(Q10$Yp) - mean(Q00$Yp), 3),'\n')
-  cat("Total:", round(mean(Q11$Yp) - mean(Q00$Yp), 3),'\n')
+  obj$ori_df <- fitR2$df
+  obj$dat_MC <- resultDatM
+  class(obj) <- "tvmedg"
+  
+  ## print result
+  cat("Q(a,a):", round(qqq$mQ11, 3),cal_ci(qqq_ci$mQ11,ci,boot = boot),'\n')
+  cat("Q(a,a*):", round(qqq$mQ10, 3),cal_ci(qqq_ci$mQ10,ci,boot = boot),'\n')
+  cat("Q(a*,a*):", round(qqq$mQ00, 3),cal_ci(qqq_ci$mQ00,ci,boot = boot),'\n')
+  
+  cat("Indirect:", round(qqq$rIE_b, 3),cal_ci(qqq_ci$rIE_b,ci,boot = boot),'\n')
+  cat("Direct:", round(qqq$rDE_b, 3),cal_ci(qqq_ci$rDE_b,ci,boot = boot),'\n')
+  cat("Total:", round(qqq$rTE_b, 3),cal_ci(qqq_ci$rTE_b,ci,boot = boot),'\n')
   cat("Proportional explain:", 
-      round((mean(Q11$Yp) - mean(Q10$Yp))/(mean(Q11$Yp) - mean(Q00$Yp)), 3),'\n')
+      round(qqq$rPE_b, 3),cal_ci(qqq_ci$rPE_b,ci,boot = boot),'\n')
+  
+  cat("Total time elapsed:",elapsed_time,attr(elapsed_time,"units"),'\n')
+  
+  invisible(obj)
+  
 }
 ```
 
-# Run the code
+# run
+
+## Default
 
 ```{r}
+library(furrr)
+library(doParallel)
+
 cl <- makeCluster(8)
 registerDoParallel(cl)
 
-datMC <- g_boot(data = dat, length = 12, seed = 0, montecarlo = 100)
+tvmedg(data = dat0,
+       basec = c("age","sex","ow","risk"),
+       expo = c("Ap"),
+       med = c("Mp"),
+       tvar = c("L1","L2","L3"),
+       outc = c("Yp"),
+       time = c("mm"),
+       lag = 2,
+       norev = c("Mp"),
+       cont_exp = NULL,
+       cont_exp_std = F,
+       tvar_to_med = F,
+       mreg = "binomial",
+       lreg = c("binomial","gaussian","gaussian"),
+       yreg = "binomial",
+       sp_list = NULL,
+       sp_type = NULL,
+       sp_df= NULL,
+       followup = 12,
+       seed = 0,
+       montecarlo = 10,
+       boot = FALSE, 
+       nboot = 1,
+       ci = .95,
+       parallel=TRUE)
 ```
 
-```{r}
-ExtResult(datMC)
-```
+## Đổi các agument
+
+Gồm: continuous exposure,cont_exp_std,tvar_to_med =T, thêm splines + dof, bootraping
 
 ```{r}
-# B <- 5
-# 
-# Q11_b <- numeric(length = B)
-# Q10_b <- numeric(length = B)
-# Q00_b <- numeric(length = B)
-# 
-# 
-# rIE_b <- numeric(length = B)
-# rDE_b <- numeric(length = B)
-# rTE_b <- numeric(length = B)
-# rPE_b <- numeric(length = B)
+tvmedg(data = dat0,
+       basec = c("age","sex","ow","risk"),
+       expo = c("L2"),
+       med = c("Mp"),
+       tvar = c("L1","L3"),
+       outc = c("Yp"),
+       time = c("mm"),
+       lag = 2,
+       norev = c("Mp"),
+       cont_exp = c("L2"),
+       cont_exp_std = T,
+       tvar_to_med = T,
+       mreg = "binomial",
+       lreg = c("binomial","gaussian"),
+       yreg = "binomial",
+       sp_list = c("age","mm","L1"),
+       sp_type = c("bs","bs","ns"),
+       sp_df= c(3,3,3),
+       followup = 12,
+       seed = 123,
+       montecarlo = 10,
+       boot = T, 
+       nboot = 2,
+       ci = .95,
+       parallel=TRUE)
 ```
 
-```{r}
-# for(b in 1:B) {
-#   tempdat <- g_boot(data = dat, length = 94, seed = b, montecarlo = 10)
-#   tQ11 <- tempdat |> filter(lastid == 1 & Ay == 1 & Am == 1)
-#   tQ10 <- tempdat |> filter(lastid == 1 & Ay == 1 & Am == 0)
-#   tQ00 <- tempdat |> filter(lastid == 1 & Ay == 0 & Am == 0)
-#   
-#   Q11_b[b] <- mean(tQ11$Yp)
-#   Q10_b[b] <- mean(tQ10$Yp)
-#   Q00_b[b] <- mean(tQ00$Yp)
-#   
-#   rIE_b[b] <- Q11_b[b] - Q10_b[b]
-#   rDE_b[b] <- Q10_b[b] - Q00_b[b]
-#   rTE_b[b] <- Q11_b[b] - Q00_b[b]
-#   rPE_b[b] <- rIE_b[b]/rTE_b[b]
-# }
-```
-
-```{r}
-# datBoot_repl <- data.frame(id_boot = 1:B, Q11_b, Q10_b, Q00_b, rIE_b, rDE_b, rTE_b, rPE_b) 
-# 
-# quantile(datBoot_repl$Q11_b, probs = c(0.025, 0.975))
-# quantile(datBoot_repl$Q10_b, probs = c(0.025, 0.975))
-# quantile(datBoot_repl$Q00_b, probs = c(0.025, 0.975))
-# 
-# quantile(datBoot_repl$rDE_b, probs = c(0.025, 0.975))
-# quantile(datBoot_repl$rIE_b, probs = c(0.025, 0.975))
-# quantile(datBoot_repl$rTE_b, probs = c(0.025, 0.975))
-# quantile(datBoot_repl$rPE_b, probs = c(0.025, 0.975))
-```
