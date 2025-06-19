@@ -40,7 +40,7 @@ process_data <- function(basec,expo,med,tvar,lag,outc,time,
                          sp_list = NULL,
                          sp_type = NULL,
                          sp_df= NULL, data){
-
+  
   ## detect which variables are non-reversible
   if(length(which(expo %in% norev)) != 0){
     norev_expo <- paste0("A",which(expo %in% norev))
@@ -61,40 +61,55 @@ process_data <- function(basec,expo,med,tvar,lag,outc,time,
   }
   
   norev_var <- c(norev_expo,norev_med,norev_tvar)
-  
-  
+
+
+  sp_var <- NULL
+
   ## detect which variables in splines list
-  if(length(which(basec %in% sp_list)) != 0){
+  ### time-fixed var
+  if(length(which(sp_list %in% basec)) != 0){
     sp_fix <- paste0("v",which(basec %in% sp_list))
   } else{
     sp_fix <- NULL
   }
   
-  if(length(which(expo %in% sp_list)) != 0){
+  sp_var[which(sp_list %in% basec)] <- sp_fix
+  
+  ## exposure var
+  if(length(which(sp_list %in% expo)) != 0){
     sp_expo <- paste0("A",which(expo %in% sp_list))
   } else{
     sp_expo <- NULL
   }
   
-  if(length(which(med %in% sp_list)) != 0){
+  sp_var[which(sp_list %in% expo)] <- sp_expo
+  
+  ## mediator var
+  if(length(which(sp_list %in% med)) != 0){
     sp_med <- paste0("M",which(med %in% sp_list))
   } else {
     sp_med <- NULL
   }
   
-  if(length(which(tvar %in% sp_list)) != 0){
+  sp_var[which(sp_list %in% med)] <- sp_med
+  
+  ## time-varying var
+  if(length(which(sp_list %in% tvar)) != 0){
     sp_tvar <- paste0("L",which(tvar %in% sp_list))
   } else {
     sp_tvar <- NULL
   }
   
-  if(length(which(time %in% sp_list)) != 0){
+  sp_var[which(sp_list %in% tvar)] <- sp_tvar
+  
+  ## time var
+  if(length(which(sp_list %in% time)) != 0){
     sp_time <- paste0("j")
   } else{
     sp_time <- NULL
   }
   
-  sp_var <- c(sp_fix,sp_expo,sp_med,sp_tvar,sp_time)
+  sp_var[which(sp_list %in% time)] <- sp_time
   
   ## continous exposure
   if(is.null(cont_exp) & cont_exp_std == T){
@@ -354,7 +369,7 @@ process_data(
   cont_exp = c("L2"),
   cont_exp_std = T,
   sp_list = c("mm","L1","sex"),
-  sp_type = c("bs","ns","bs"),
+  sp_type = c("bs","bs","ns"),
   sp_df= c(3,3,3),
   data = dat0
 ) %>% str()
@@ -376,7 +391,7 @@ process_data(
   cont_exp = c("L2"),
   cont_exp_std = F,
   sp_list = c("mm","L1","sex"),
-  sp_type = c("bs","ns","bs"),
+  sp_type = c("bs","bs","ns"),
   sp_df= c(3,3,3),
   data = dat0
 ) %>% str()
@@ -480,7 +495,7 @@ fitg <- function(data,boot = FALSE,
 }
 ```
 
-## Output with continuous exposure
+## Output with continuous exposure and splines list
 
 Chổ này run ra coefficient của mình bị NA. Em có check lại bằng skeleton code thì cũng v. Em nghĩ do data mới này có vấn đề. Em import lại data chưa có 12mo thì mọi thứ bình thường á a.
 
@@ -497,6 +512,9 @@ process_data(
   tvar_to_med = F,
   cont_exp = c("L2"),
   cont_exp_std = T,
+  sp_list = c("mm","L1","sex"),
+  sp_type = c("bs","bs","ns"),
+  sp_df= c(3,3,4),
   data = dat0
 ) %>%  fitg(boot=T,
             mreg = "binomial",
@@ -521,6 +539,9 @@ process_data(
   tvar_to_med = F,
   cont_exp = c("L2"),
   cont_exp_std = T,
+  sp_list = c("mm","L1","sex"),
+  sp_type = c("bs","bs","ns"),
+  sp_df= c(3,3,4),
   data = dat1
 ) %>%  fitg(boot=T,
             mreg = "binomial",
@@ -847,8 +868,8 @@ fitR2 <- process_data(
   cont_exp = c("L2"),
   cont_exp_std = F,
        sp_list = c("age","mm","L1"),
-       sp_type = c("bs","bs","ns"),
-       sp_df= c(3,3,3),
+       sp_type = c("ns","bs","bs"),
+       sp_df= c(4,3,3),
   data = dat0
 ) %>%  fitg(boot=T,
             mreg = "binomial",
@@ -1126,8 +1147,8 @@ tvmedg(data = dat0,
        lreg = c("binomial","gaussian"),
        yreg = "binomial",
        sp_list = c("age","mm","L1"),
-       sp_type = c("bs","bs","ns"),
-       sp_df= c(3,3,3),
+       sp_type = c("ns","bs","bs"),
+       sp_df= c(4,3,3),
        followup = 12,
        seed = 123,
        montecarlo = 10,
