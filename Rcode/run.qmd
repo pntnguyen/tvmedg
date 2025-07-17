@@ -16,6 +16,7 @@ library(tidyverse)
 library(magrittr)
 library(testthat)
 library(splines)
+library(data.table)
 ```
 
 # Import data
@@ -27,16 +28,10 @@ dat0 %>% as.data.frame() %>% as_tibble()
 
 # Process data function
 
-Em rút gọn continuous exposure còn 2 argument thôi, cont_exp = NULL => binary, cont_exp_std = F giới hạn chỉ xài được khi đã define continous exposure
-
-Về phần splines em định nghĩa là nếu mọi thứ null thì mình smooth time variables với df là 3 luôn, mình có thể có options là nếu mọi thứ NULL thì không smooth time. Do em quên không note nên khúc đó không nhớ nhóm mình có thống nhất với nhau không, em đọc lại study plan thì trước mắt là code theo ý hiểu của em như thế này.
-
-Có một vấn đề mình cần cân nhắc là splines và standardize có apply cho lag luôn không? Em đang code là apply cho lag luôn
-
 ```{r}
 process_data <- function(basec,expo,med,tvar,lag,outc,time,
                          norev = NULL,tvar_to_med = FALSE,
-                         cont_exp = NULL,cont_exp_std = F,
+                         cont_exp = FALSE,cont_exp_std = F,
                          sp_list = NULL,
                          sp_type = NULL,
                          sp_df= NULL, data){
@@ -112,17 +107,15 @@ process_data <- function(basec,expo,med,tvar,lag,outc,time,
   sp_var[which(sp_list %in% time)] <- sp_time
   
   ## continous exposure
-  if(is.null(cont_exp) & cont_exp_std == T){
-    stop("standardize only applicable when continuous exposure was defined, default is NULL")
-  } else if (is.null(cont_exp) & cont_exp_std == F){
+  if(cont_exp == F & cont_exp_std == T){
+    stop("standardize only applicable when continuous exposure was TRUE, default is FALSE")
+  } else if (cont_exp == F & cont_exp_std == F){
     ## binary exposure
     expo_mean <- 0
-  } else if (!is.null(cont_exp) & cont_exp != expo){
-    stop("defined continuous exposure was not the input exposure")
-  } else if (!is.null(cont_exp) & cont_exp_std == F){
+  } else if (cont_exp == T & cont_exp_std == F){
     ## continuous exposure without standardize
     expo_mean <- mean(data[,expo])
-  } else if (!is.null(cont_exp) & cont_exp_std == T){
+  } else if (cont_exp == T & cont_exp_std == T){
     ## continuous exposure with standardize
     expo_mean <- 0
     data[,expo] <- as.numeric(scale(data[,expo]))
@@ -249,9 +242,9 @@ process_data <- function(basec,expo,med,tvar,lag,outc,time,
   if (any(timee %in% sp_var)){
     timee_sp <- sp_type[which(sp_var %in% timee)]
     timee_df <- sp_df[which(sp_var %in% timee)]
-    timee <- paste0("splines::",timee_sp,"(jj,df=",timee_df,")")
+    timee <- paste0("splines::",timee_sp,"(j,df=",timee_df,")")
   } else {
-    timee <- paste0("splines::","bs","(jj,df=",3,")")
+    timee <- paste0("j")
   }
   
   
@@ -366,7 +359,7 @@ process_data(
   time = c("mm"),
   norev = c("Mp"),
   tvar_to_med = F,
-  cont_exp = c("L2"),
+  cont_exp = T,
   cont_exp_std = T,
   sp_list = c("mm","L1","sex"),
   sp_type = c("bs","bs","ns"),
@@ -388,7 +381,7 @@ process_data(
   time = c("mm"),
   norev = c("Mp"),
   tvar_to_med = F,
-  cont_exp = c("L2"),
+  cont_exp = T,
   cont_exp_std = F,
   sp_list = c("mm","L1","sex"),
   sp_type = c("bs","bs","ns"),
@@ -398,8 +391,6 @@ process_data(
 ```
 
 # fitg function
-
-Chổ binomial và gaussian em không đổi được, do em assign nó thẳng vô family của glm luôn. Rồi lúc predict ở dưới em extract từ model ra nên nếu chuyển sang lm với logistic nó hơi lằng nhằng :))
 
 ```{r}
 ## cen_and_scale function
@@ -419,31 +410,36 @@ cen_and_scale <- function(time){
 
 resamp <- function(data,boot = FALSE){
 
-  df <- data
+  df <- as.data.table(data)
 
   # set.seed(seed)
   # cat("Running SEED", seed, "\n")
   # cat("\n")
   # cat("Resampling Data", "\n")
   
-  clusters <- names(table(df$id))
-  index <- sample(1:length(clusters), length(clusters), replace = TRUE)
-  bb <- table(clusters[index])
-  boot_df <- NULL
+  clusters <- unique(df$id)
+  samples  <- sample(clusters, length(clusters), replace = TRUE)
+  bb       <- table(samples)
   
-  if(boot == F) {
-    # not doing bootstrap
-    boot_df <- df 
+  #— bootstrap
+  if (boot == F) {
+    # no bootstrap
+    boot_df <- copy(df)
   } else {
-    for(zzz in 1:max(bb)) {
-      # Loop over repeated id
-      cc <- df[df$id %in% names(bb[bb %in% c(zzz:max(bb))]), ]
-      cc$bid <- paste0(cc$id, zzz)
-      boot_df <- rbind(boot_df, cc)
+    maxbb   <- max(bb)
+    out_list <- vector("list", maxbb)
+    
+    for (zzz in seq_len(maxbb)) {
+      # IDs drawn at least zzz times
+      ids_zzz <- names(bb)[bb >= zzz]
+      cc      <- df[id %in% ids_zzz]
+      cc[, bid := paste0(id, zzz)]
+      out_list[[zzz]] <- cc
     }
+    
+    # one single bind of all “layers”
+    boot_df <- rbindlist(out_list, use.names = TRUE)
   }
-  
-  boot_df$jj <- cen_and_scale(boot_df$j)$jj
   
   boot_df
 }
@@ -510,7 +506,7 @@ process_data(
   time = c("mm"),
   norev = c("Mp"),
   tvar_to_med = F,
-  cont_exp = c("L2"),
+  cont_exp = T,
   cont_exp_std = T,
   sp_list = c("mm","L1","sex"),
   sp_type = c("bs","bs","ns"),
@@ -521,35 +517,6 @@ process_data(
             lreg = c("binomial","gaussian"),
             yreg = "binomial")
 ```
-
-
-## data cũ
-
-```{r}
-dat1 <- readRDS("../Data/tvmed_dat100.RDS")
-process_data(
-  basec = c("age","sex","ow","risk"),
-  expo = c("L2"),
-  med = c("Mp"),
-  tvar = c("L1","L3"),
-  outc = c("Yp"),
-  lag = 2,
-  time = c("mm"),
-  norev = c("Mp"),
-  tvar_to_med = F,
-  cont_exp = c("L2"),
-  cont_exp_std = T,
-  sp_list = c("mm","L1","sex"),
-  sp_type = c("bs","bs","ns"),
-  sp_df= c(3,3,4),
-  data = dat1
-) %>%  fitg(boot=T,
-            mreg = "binomial",
-            lreg = c("binomial","gaussian"),
-            yreg = "binomial")
-```
-
-
 
 # Baseline_mc function
 
@@ -593,7 +560,7 @@ process_data(
   time = c("mm"),
   norev = c("Mp"),
   tvar_to_med = F,
-  cont_exp = c("L2"),
+  cont_exp = T,
   cont_exp_std = T,
   data = dat0
 ) %>%  fitg(boot=T,
@@ -865,7 +832,7 @@ fitR2 <- process_data(
   time = c("mm"),
   norev = c("Mp"),
   tvar_to_med = F,
-  cont_exp = c("L2"),
+  cont_exp = T,
   cont_exp_std = F,
        sp_list = c("age","mm","L1"),
        sp_type = c("ns","bs","bs"),
@@ -920,14 +887,14 @@ cal_ci <- function(data,ci = 0.95,boot = T){
 
 ```{r}
 tvmedg <- function(data,basec,expo,med,tvar,outc,time,lag = 2,
-                   norev = NULL, cont_exp = NULL,cont_exp_std = F,
+                   norev = NULL, cont_exp = FALSE,cont_exp_std = F,
                    tvar_to_med = F,
                    mreg = "binomial",
                    lreg = c("binomial","gaussian","gaussian"),
                    yreg = "binomial",
                    sp_list = NULL,sp_type = NULL,sp_df= NULL,
                    followup = 12,
-                   seed = 0,montecarlo = 10,boot = FALSE,nboot = 1,ci = .95,
+                   seed = 0,montecarlo = 10,boot = FALSE,nboot = NULL,ci = .95,
                    parallel=TRUE){
   
   set.seed(seed)
@@ -1108,7 +1075,7 @@ tvmedg(data = dat0,
        time = c("mm"),
        lag = 2,
        norev = c("Mp"),
-       cont_exp = NULL,
+       cont_exp = FALSE,
        cont_exp_std = F,
        tvar_to_med = F,
        mreg = "binomial",
@@ -1121,7 +1088,7 @@ tvmedg(data = dat0,
        seed = 0,
        montecarlo = 10,
        boot = FALSE, 
-       nboot = 1,
+       nboot = NULL,
        ci = .95,
        parallel=TRUE)
 ```
@@ -1140,7 +1107,7 @@ tvmedg(data = dat0,
        time = c("mm"),
        lag = 2,
        norev = c("Mp"),
-       cont_exp = c("L2"),
+       cont_exp = T,
        cont_exp_std = T,
        tvar_to_med = T,
        mreg = "binomial",
